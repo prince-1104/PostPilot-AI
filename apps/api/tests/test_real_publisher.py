@@ -64,6 +64,7 @@ def _publisher(settings_factory, encryptor: TokenEncryptor, transport: httpx.Moc
     settings = settings_factory(
         publish_provider="linkedin",
         enable_real_publishing=True,
+        live_publish_require_canary=False,
         linkedin_api_version="202611",
     )
     client = httpx.Client(transport=transport, timeout=5.0)
@@ -355,6 +356,7 @@ async def test_real_success_persists_urn(
     settings = settings_factory(
         publish_provider="linkedin",
         enable_real_publishing=True,
+        live_publish_require_canary=False,
     )
     _user, _raw, connection = await seed_user_session_and_connection(
         db_session, encryptor=token_encryptor, subject=f"real-{uuid4()}"
@@ -427,6 +429,7 @@ async def test_ambiguous_never_auto_republished(
     settings = settings_factory(
         publish_provider="linkedin",
         enable_real_publishing=True,
+        live_publish_require_canary=False,
     )
     _user, _raw, connection = await seed_user_session_and_connection(
         db_session, encryptor=token_encryptor, subject=f"amb-{uuid4()}"

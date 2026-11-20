@@ -8,7 +8,8 @@ workers, leases/retries, the fake provider (still the safe default), and optiona
 See [docs/implementation-status.md](docs/implementation-status.md) for exactly what is
 and is not built, [docs/publishing-engine.md](docs/publishing-engine.md) for the worker
 architecture, [docs/linkedin-publishing.md](docs/linkedin-publishing.md) for real LinkedIn
-publishing, [docs/scheduled-posts.md](docs/scheduled-posts.md) for the scheduling API,
+publishing, [docs/live-e2e-publishing.md](docs/live-e2e-publishing.md) for the canary
+live E2E checklist, [docs/scheduled-posts.md](docs/scheduled-posts.md) for the scheduling API,
 [docs/linkedin-oauth.md](docs/linkedin-oauth.md) for OAuth setup, and
 [docs/decisions/0001-architecture.md](docs/decisions/0001-architecture.md) for the
 reasoning behind the stack.

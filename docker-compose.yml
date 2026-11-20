@@ -35,6 +35,8 @@ x-api-environment: &api-environment
   FAKE_PUBLISH_DEFAULT_SCENARIO: ${FAKE_PUBLISH_DEFAULT_SCENARIO:-success}
   LINKEDIN_API_VERSION: ${LINKEDIN_API_VERSION:-202611}
   LINKEDIN_API_BASE_URL: ${LINKEDIN_API_BASE_URL:-https://api.linkedin.com}
+  LIVE_PUBLISH_REQUIRE_CANARY: ${LIVE_PUBLISH_REQUIRE_CANARY:-true}
+  LIVE_PUBLISH_CANARY_POST_IDS: ${LIVE_PUBLISH_CANARY_POST_IDS:-}
   CELERY_WORKER_CONCURRENCY: ${CELERY_WORKER_CONCURRENCY:-2}
   PUBLISH_DISPATCHER_INTERVAL_SECONDS: ${PUBLISH_DISPATCHER_INTERVAL_SECONDS:-15}
   PUBLISH_RECOVERY_INTERVAL_SECONDS: ${PUBLISH_RECOVERY_INTERVAL_SECONDS:-30}
@@ -141,7 +143,8 @@ services:
       - app.workers.celery_app.celery_app
       - worker
       - --loglevel=INFO
-      - --concurrency=${CELERY_WORKER_CONCURRENCY:-2}
+      # solo: prefork/threads deadlock with asyncio.run()+SQLAlchemy in this stack.
+      - --pool=solo
       - -Q
       - ${CELERY_QUEUE_PUBLISH:-publish}
     environment: *api-environment

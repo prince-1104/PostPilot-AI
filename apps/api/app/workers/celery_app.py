@@ -9,6 +9,9 @@ from celery.schedules import schedule
 
 from app.core.config import Settings, get_settings
 
+# Non-root containers cannot write under /app; /tmp is intentional and local-only.
+_CELERYBEAT_SCHEDULE_PATH = "/tmp/celerybeat-schedule"  # noqa: S108
+
 celery_app = Celery("postpilot")
 celery_app.conf.imports = ("app.workers.tasks",)
 
@@ -60,7 +63,7 @@ def configure_celery(settings: Settings | None = None) -> Celery:
         enable_utc=True,
         worker_hijack_root_logger=False,
         # Writable for the non-root container user (see Compose beat --schedule).
-        beat_schedule_filename="/tmp/celerybeat-schedule",
+        beat_schedule_filename=_CELERYBEAT_SCHEDULE_PATH,
     )
     _configured = True
     return celery_app

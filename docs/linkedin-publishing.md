@@ -112,24 +112,9 @@ on LinkedIn while PostPilot marks `requires_review`. **Never blindly republish.*
 
 ## Manual browser E2E (live LinkedIn)
 
-**Do not run this during automated tests.** Requires explicit operator approval.
+**Do not run live publish steps during automated tests.** See the full canary checklist in
+[live-e2e-publishing.md](live-e2e-publishing.md).
 
-Preconditions:
-
-- Real OAuth completed with `w_member_social`
-- Token unexpired; Connections page shows ready to schedule
-- `PUBLISH_PROVIDER=linkedin` and `ENABLE_REAL_PUBLISHING=true` on **api**, **worker**,
-  and **beat**
-- You approve publishing one harmless test sentence
-
-Steps:
-
-1. Sign in with LinkedIn.
-2. Create a short test post; schedule ~2–3 minutes ahead (`SCHEDULE_MIN_LEAD_SECONDS`).
-3. Confirm `scheduled` in PostgreSQL / dashboard.
-4. Watch Celery Beat dispatch and Worker claim (`docker compose logs -f worker beat`).
-5. Expect LinkedIn **201** and a real `urn:li:share:` / `urn:li:ugcPost:` persisted.
-6. Dashboard → `published`; open permalink; confirm on the LinkedIn profile.
-
-Blockers if live E2E cannot run: missing LinkedIn app products, expired token, or
-`ENABLE_REAL_PUBLISHING` left false (safe default).
+In addition to OAuth + `ENABLE_REAL_PUBLISHING`, Phase 4C requires an explicit post ID on
+`LIVE_PUBLISH_CANARY_POST_IDS` while `LIVE_PUBLISH_REQUIRE_CANARY=true` (default). An empty
+allowlist blocks all real LinkedIn submissions even when the real provider is enabled.

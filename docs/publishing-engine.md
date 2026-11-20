@@ -24,6 +24,9 @@ PostgreSQL ◄── leases, attempts, status ────┘
 - **Beat** only schedules periodic tasks. It never publishes.
 - **Worker** claims posts and runs the configured publisher.
 - **PostgreSQL** is the system of record. Redis is a rebuildable queue.
+- Compose runs the worker with `--pool=solo`. The default Celery prefork pool
+  deadlocks when tasks call `asyncio.run()` with SQLAlchemy async sessions; solo
+  (and the per-task engine dispose in `app.workers.runtime`) keep dispatch healthy.
 
 ## Post state machine
 
@@ -89,6 +92,18 @@ republishing.
 | --- | --- | --- |
 | `fake` (default) | — | Deterministic simulation; never calls LinkedIn |
 | `linkedin` | `ENABLE_REAL_PUBLISHING=true` | `POST /rest/posts` with decrypted member token |
+
+### Live canary (Phase 4C)
+
+When `PUBLISH_PROVIDER=linkedin` and `LIVE_PUBLISH_REQUIRE_CANARY=true` (default):
+
+- Dispatcher leases **only** IDs listed in `LIVE_PUBLISH_CANARY_POST_IDS`.
+- An empty allowlist means **zero** real dispatches.
+- The worker blocks unapproved IDs before claim / before HTTP and leaves them `scheduled`
+  (deferred), never `published` or `failed` solely due to the canary.
+- Fake provider mode ignores the canary gate.
+
+See [live-e2e-publishing.md](live-e2e-publishing.md).
 
 Fake content markers (still supported):
 

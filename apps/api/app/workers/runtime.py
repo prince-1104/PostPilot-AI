@@ -5,15 +5,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.db.session import create_engine, create_session_factory
 from app.publishing.factory import build_publisher
 
-_engine: AsyncEngine | None = None
-_session_factory: async_sessionmaker[AsyncSession] | None = None
 _settings: Settings | None = None
 
 
@@ -25,22 +23,23 @@ def get_worker_settings() -> Settings:
     return _settings
 
 
-def get_session_factory() -> async_sessionmaker[AsyncSession]:
-    global _engine, _session_factory
-    if _session_factory is None:
-        settings = get_worker_settings()
-        _engine = create_engine(settings)
-        _session_factory = create_session_factory(_engine)
-    return _session_factory
-
-
 def run_async[T](factory: Callable[[AsyncSession], Awaitable[T]]) -> T:
-    """Run an async coroutine with a fresh DB session inside a Celery worker process."""
+    """Run an async coroutine with a fresh DB session inside a Celery worker process.
+
+    Each call uses ``asyncio.run`` with a **new** engine that is disposed before the
+    loop closes. Reusing a process-global AsyncEngine across separate event loops
+    deadlocks Celery prefork workers (tasks stay ``received`` forever).
+    """
 
     async def _runner() -> T:
-        session_factory = get_session_factory()
-        async with session_factory() as session:
-            return await factory(session)
+        settings = get_worker_settings()
+        engine = create_engine(settings)
+        session_factory = create_session_factory(engine)
+        try:
+            async with session_factory() as session:
+                return await factory(session)
+        finally:
+            await engine.dispose()
 
     return asyncio.run(_runner())
 

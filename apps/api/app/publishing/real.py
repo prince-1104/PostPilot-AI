@@ -15,6 +15,7 @@ from app.core.config import Settings
 from app.core.security import TokenEncryptionError, TokenEncryptor
 from app.models import LinkedInConnection
 from app.models.enums import ConnectionStatus
+from app.publishing.canary import is_post_canary_approved
 from app.publishing.outcomes import (
     OutcomeKind,
     PublishExecutionContext,
@@ -73,6 +74,32 @@ class RealLinkedInPublisher:
         content: str,
         execution_context: PublishExecutionContext,
     ) -> PublishOutcome:
+        from uuid import UUID
+
+        try:
+            post_uuid = UUID(execution_context.post_id)
+        except ValueError:
+            return PublishOutcome(
+                kind=OutcomeKind.PERMANENT,
+                submission_started=False,
+                error_category="canary",
+                sanitized_error_code="live_publish_invalid_post_id",
+                simulated=False,
+            )
+        if not is_post_canary_approved(self._settings, post_uuid):
+            logger.warning(
+                "linkedin.publish.canary_blocked",
+                post_id=execution_context.post_id,
+                attempt_id=execution_context.attempt_id,
+            )
+            return PublishOutcome(
+                kind=OutcomeKind.PRE_NETWORK_FAILURE,
+                submission_started=False,
+                error_category="canary",
+                sanitized_error_code="live_publish_canary_blocked",
+                simulated=False,
+            )
+
         precheck = self._preflight(connection)
         if precheck is not None:
             return precheck

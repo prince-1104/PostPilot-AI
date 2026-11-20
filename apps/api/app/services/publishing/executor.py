@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import structlog
@@ -14,6 +14,10 @@ from app.core.config import Settings
 from app.models import LinkedInConnection, PublishAttempt, ScheduledPost
 from app.models.enums import AttemptExecutionState, ConnectionStatus, PostStatus
 from app.publishing.base import LinkedInPublisher
+from app.publishing.canary import (
+    defer_unapproved_post,
+    is_post_canary_approved,
+)
 from app.publishing.outcomes import (
     OutcomeKind,
     PublishExecutionContext,
@@ -57,6 +61,46 @@ class PublishExecutor:
             fencing_token=str(claim.attempt.fencing_token),
         )
         return True
+
+    async def release_canary_block(
+        self, *, claim: ClaimResult, now: datetime | None = None
+    ) -> str:
+        """Undo a claim for an unapproved canary post without failed/published.
+
+        The attempt is recorded as a non-submission safety skip; the post returns to
+        ``scheduled`` with a deferred ``next_attempt_at`` so it is not re-dispatched
+        immediately. No LinkedIn HTTP call is made.
+        """
+        from app.publishing.canary import CANARY_DEFER_SECONDS
+
+        clock = now or datetime.now(UTC)
+        post, attempt = await self._lock_owned(claim)
+        if post is None or attempt is None:
+            return "fenced_out"
+
+        attempt.execution_state = AttemptExecutionState.RETRYABLE_FAILURE.value
+        attempt.finished_at = clock
+        attempt.error_category = "canary"
+        attempt.sanitized_error_code = "live_publish_canary_blocked"
+        attempt.next_retry_at = clock + timedelta(seconds=CANARY_DEFER_SECONDS)
+        attempt.updated_at = clock
+
+        post.status = PostStatus.SCHEDULED.value
+        post.next_attempt_at = attempt.next_retry_at
+        post.current_attempt_id = None
+        post.processing_lease_until = None
+        post.dispatch_lease_until = None
+        # Do not set last_error_code to a failure that implies LinkedIn rejection.
+        post.updated_at = clock
+        post.version += 1
+        await self._db.commit()
+        logger.info(
+            "publish.canary.released_claim",
+            post_id=str(post.id),
+            attempt_id=str(attempt.id),
+            next_attempt_at=post.next_attempt_at.isoformat() if post.next_attempt_at else None,
+        )
+        return "canary_blocked"
 
     def invoke_publisher(self, *, claim: ClaimResult) -> PublishOutcome:
         """Call the publisher outside any DB transaction."""
@@ -345,17 +389,35 @@ async def run_publish_pipeline(
     """Claim → mark submitting → publish → apply. Used by Celery tasks and tests."""
     from app.services.publishing.claim import ClaimService
 
+    clock = now or datetime.now(UTC)
+    if not is_post_canary_approved(settings, post_id):
+        await defer_unapproved_post(
+            session, settings=settings, post_id=post_id, now=clock
+        )
+        logger.info(
+            "publish.canary.blocked_before_claim",
+            post_id=str(post_id),
+            worker_id=worker_id,
+        )
+        return "canary_blocked"
+
     claim = await ClaimService(session, settings=settings).claim(
         post_id=post_id,
         worker_id=worker_id,
         celery_task_id=celery_task_id,
-        now=now,
+        now=clock,
     )
     if claim is None:
         return "skipped"
 
     executor = PublishExecutor(session, settings=settings, publisher=publisher)
-    marked = await executor.mark_submitting(claim=claim, now=now)
+
+    # Defense in depth if settings changed between dispatch and claim.
+    if not is_post_canary_approved(settings, claim.post.id):
+        await executor.release_canary_block(claim=claim, now=clock)
+        return "canary_blocked"
+
+    marked = await executor.mark_submitting(claim=claim, now=clock)
     if not marked:
         return "fenced_out"
 
@@ -375,4 +437,4 @@ async def run_publish_pipeline(
             simulated=True,
         )
 
-    return await executor.apply_outcome(claim=claim, outcome=outcome, now=now)
+    return await executor.apply_outcome(claim=claim, outcome=outcome, now=clock)

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.models import ScheduledPost
 from app.models.enums import PostStatus
+from app.publishing.canary import canary_enforced
 from app.services.publishing.metrics import METRICS
 
 logger = structlog.get_logger(__name__)
@@ -86,6 +87,18 @@ class DispatchService:
                 ScheduledPost.dispatch_lease_until <= clock,
             ),
         ]
+
+        # Phase 4C: with real LinkedIn + canary required, never lease unrelated posts.
+        if canary_enforced(self._settings):
+            approved = self._settings.live_publish_canary_post_ids
+            if not approved:
+                logger.info(
+                    "publish.dispatcher.canary_empty",
+                    message="No LIVE_PUBLISH_CANARY_POST_IDS; skipping dispatch.",
+                )
+                await self._db.commit()
+                return []
+            filters.append(ScheduledPost.id.in_(approved))
 
         if dialect == "postgresql":
             stmt = (

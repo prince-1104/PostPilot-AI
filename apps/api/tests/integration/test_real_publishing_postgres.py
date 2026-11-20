@@ -29,6 +29,7 @@ async def pg_factory() -> AsyncIterator[tuple[async_sessionmaker[AsyncSession], 
     settings = Settings(
         publish_provider="linkedin",
         enable_real_publishing=True,
+        live_publish_require_canary=False,
     )
     engine = create_engine(settings)
     factory = create_session_factory(engine)
@@ -69,12 +70,12 @@ async def test_real_provider_success_persists_on_postgres(
 
     calls = 0
 
+    restli_id = f"urn:li:share:{uuid4().int % 10**19}"
+
     def handler(_request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
-        return httpx.Response(
-            201, headers={"x-restli-id": "urn:li:share:555444333222111"}
-        )
+        return httpx.Response(201, headers={"x-restli-id": restli_id})
 
     publisher = RealLinkedInPublisher(
         settings=settings,
@@ -102,7 +103,7 @@ async def test_real_provider_success_persists_on_postgres(
             await session.execute(select(PublishAttempt).where(PublishAttempt.post_id == post_id))
         ).scalars().all()
     assert row.status == PostStatus.PUBLISHED.value
-    assert row.linkedin_post_urn == "urn:li:share:555444333222111"
+    assert row.linkedin_post_urn == restli_id
     assert len(attempts) == 1
 
 
@@ -139,12 +140,12 @@ async def test_concurrent_workers_single_real_api_call(
 
     calls = 0
 
+    restli_id = f"urn:li:ugcPost:{uuid4().int % 10**19}"
+
     def handler(_request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
-        return httpx.Response(
-            201, headers={"x-restli-id": "urn:li:ugcPost:121212121212"}
-        )
+        return httpx.Response(201, headers={"x-restli-id": restli_id})
 
     def make_publisher() -> RealLinkedInPublisher:
         return RealLinkedInPublisher(
@@ -173,4 +174,4 @@ async def test_concurrent_workers_single_real_api_call(
         row = (
             await session.execute(select(ScheduledPost).where(ScheduledPost.id == post_id))
         ).scalar_one()
-    assert row.linkedin_post_urn == "urn:li:ugcPost:121212121212"
+    assert row.linkedin_post_urn == restli_id

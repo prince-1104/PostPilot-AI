@@ -8,6 +8,7 @@ and containers receive their environment from Docker Compose.
 from functools import lru_cache
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -106,6 +107,9 @@ class Settings(BaseSettings):
     enable_real_publishing: bool = False
     allow_fake_publisher_in_production: bool = False
     fake_publish_default_scenario: str = Field(default="success", min_length=1)
+    # Phase 4C canary: when provider=linkedin and this is true, only listed post IDs publish.
+    live_publish_require_canary: bool = True
+    live_publish_canary_post_ids: Annotated[list[UUID], NoDecode] = Field(default_factory=list)
     linkedin_api_version: str = Field(default="202611", min_length=6, max_length=6)
     linkedin_api_base_url: str = Field(default="https://api.linkedin.com")
     linkedin_publish_connect_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
@@ -198,6 +202,20 @@ class Settings(BaseSettings):
     @classmethod
     def _validate_linkedin_api_base_url(cls, value: str) -> str:
         return _assert_linkedin_api_base_url(value)
+
+    @field_validator("live_publish_canary_post_ids", mode="before")
+    @classmethod
+    def _parse_canary_post_ids(cls, value: object) -> object:
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            return [part.strip() for part in value.replace(";", ",").split(",") if part.strip()]
+        return value
+
+    @field_validator("live_publish_canary_post_ids")
+    @classmethod
+    def _dedupe_canary_post_ids(cls, value: list[UUID]) -> list[UUID]:
+        return list(dict.fromkeys(value))
 
     @model_validator(mode="after")
     def _validate_publish_provider(self) -> Settings:
