@@ -9,8 +9,18 @@ class LinkedInTokenResponse:
     access_token: str
     expires_in: int
     id_token: str
-    scope: str
+    # None when LinkedIn omitted the field. Empty string is treated as malformed upstream.
+    scope: str | None
     token_type: str = "Bearer"  # noqa: S105
+
+
+@dataclass(frozen=True, slots=True)
+class LinkedInTokenIntrospection:
+    active: bool
+    client_id: str | None
+    # Raw comma-delimited scope string from LinkedIn, or None when omitted.
+    scope: str | None
+    status: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

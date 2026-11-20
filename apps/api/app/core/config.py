@@ -24,6 +24,7 @@ REQUIRED_LINKEDIN_SCOPES: frozenset[str] = frozenset(
 
 LINKEDIN_AUTHORIZATION_URL = "https://www.linkedin.com/oauth/v2/authorization"
 LINKEDIN_TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken"  # noqa: S105
+LINKEDIN_INTROSPECT_URL = "https://www.linkedin.com/oauth/v2/introspectToken"
 LINKEDIN_USERINFO_URL = "https://api.linkedin.com/v2/userinfo"
 LINKEDIN_JWKS_URL = "https://www.linkedin.com/oauth/openid/jwks"
 # LinkedIn has used both issuer values; accept either when validating ID tokens.

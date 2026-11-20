@@ -18,6 +18,11 @@ from app.integrations.linkedin import (
     LinkedInClient,
     LinkedInIntegrationError,
     LinkedInOidcValidator,
+    LinkedInScopeError,
+    LinkedInTokenResponse,
+    format_granted_scopes,
+    parse_introspection_scopes,
+    parse_token_exchange_scopes,
 )
 from app.models import LinkedInConnection, OAuthState, User
 from app.models.enums import ConnectionStatus
@@ -104,19 +109,28 @@ class OAuthService:
             token_response = await self._linkedin.exchange_code(code=code)
             id_claims = self._oidc.validate_id_token(token_response.id_token)
             userinfo = await self._linkedin.fetch_userinfo(access_token=token_response.access_token)
+            granted = await self._resolve_granted_scopes(token_response)
         except LinkedInIntegrationError as exc:
             raise OAuthError(exc.message) from exc
 
         if userinfo.sub != id_claims.subject:
             raise OAuthError("LinkedIn userinfo subject did not match the ID token subject.")
 
-        granted = set(token_response.scope.split())
         missing = sorted(REQUIRED_LINKEDIN_SCOPES - granted)
         if missing:
+            logger.warning(
+                "oauth.scopes_missing",
+                missing_scopes=missing,
+                granted_scopes=sorted(granted),
+                granted_count=len(granted),
+            )
+            granted_display = ", ".join(sorted(granted)) if granted else "(none)"
             raise OAuthError(
                 "LinkedIn did not grant the required scopes: "
-                f"{', '.join(missing)}. Enable the corresponding products on the "
-                "LinkedIn developer app and try again."
+                f"{', '.join(missing)}. "
+                f"LinkedIn reported: {granted_display}. "
+                "Enable the corresponding products on the LinkedIn developer app "
+                "and reconnect so consent is requested again."
             )
 
         current_user = await self._resolve_reconnect_user(
@@ -140,7 +154,7 @@ class OAuthService:
             provider_subject=id_claims.subject,
             access_token=token_response.access_token,
             expires_in=token_response.expires_in,
-            granted_scopes=token_response.scope,
+            granted_scopes=format_granted_scopes(granted),
         )
 
         issued = await self._sessions.rotate_session(
@@ -151,6 +165,105 @@ class OAuthService:
         await self._db.refresh(user)
         logger.info("oauth.completed", user_id=str(user.id))
         return OAuthResult(user=user, issued_session=issued)
+
+    async def _resolve_granted_scopes(
+        self, token_response: LinkedInTokenResponse
+    ) -> frozenset[str]:
+        """Determine granted scopes without assuming the request was fully approved.
+
+        Token-exchange ``scope`` is parsed as space-delimited (URL-decoded per LinkedIn
+        docs). Live LinkedIn OIDC responses have been observed returning a
+        comma-delimited string in that field instead; when space-parsing does not
+        satisfy required scopes we verify via ``introspectToken`` (comma-delimited)
+        rather than reinterpreting the token-exchange field with the wrong parser.
+        Absent or blank ``scope`` also forces introspection.
+        """
+        raw_scope = token_response.scope
+        if raw_scope is None or not raw_scope.strip():
+            logger.info(
+                "oauth.scopes_need_introspection",
+                reason="scope_absent" if raw_scope is None else "scope_blank",
+                introspection_attempted=True,
+            )
+            return await self._scopes_from_introspection(token_response.access_token)
+
+        granted = parse_token_exchange_scopes(raw_scope)
+        logger.info(
+            "oauth.scopes_from_token_response",
+            granted_scopes=sorted(granted),
+            granted_count=len(granted),
+            scope_has_comma="," in raw_scope,
+            scope_has_space=any(ch.isspace() for ch in raw_scope),
+            scope_char_len=len(raw_scope),
+            introspection_attempted=False,
+        )
+        if granted >= REQUIRED_LINKEDIN_SCOPES:
+            return granted
+
+        # Incomplete or unusable under the space-delimited token-exchange format.
+        # Do not invent grants; confirm with introspection (comma-delimited).
+        logger.info(
+            "oauth.token_scopes_incomplete_trying_introspection",
+            granted_scopes=sorted(granted),
+            missing_scopes=sorted(REQUIRED_LINKEDIN_SCOPES - granted),
+            introspection_attempted=True,
+        )
+        return await self._scopes_from_introspection(token_response.access_token)
+
+    async def _scopes_from_introspection(self, access_token: str) -> frozenset[str]:
+        introspection = await self._linkedin.introspect_token(access_token=access_token)
+        client_id_match = introspection.client_id == self._settings.linkedin_client_id
+        logger.info(
+            "oauth.introspect_result",
+            active=introspection.active,
+            status=introspection.status,
+            client_id_present=introspection.client_id is not None,
+            client_id_match=client_id_match,
+            scope_field=introspection.scope is not None,
+            scope_empty=(
+                isinstance(introspection.scope, str) and introspection.scope.strip() == ""
+            ),
+            scope_char_len=(
+                len(introspection.scope) if isinstance(introspection.scope, str) else None
+            ),
+            scope_has_comma=(
+                "," in introspection.scope if isinstance(introspection.scope, str) else False
+            ),
+        )
+        if not introspection.active:
+            logger.warning(
+                "oauth.introspect_inactive",
+                status=introspection.status,
+            )
+            raise LinkedInScopeError(
+                "LinkedIn reported the access token as inactive during scope verification."
+            )
+
+        if introspection.client_id is None:
+            logger.warning("oauth.introspect_missing_client_id")
+            raise LinkedInScopeError(
+                "LinkedIn introspection did not confirm the application client ID."
+            )
+        if not client_id_match:
+            logger.warning("oauth.introspect_client_id_mismatch")
+            raise LinkedInScopeError(
+                "LinkedIn introspection returned a client ID that does not match this application."
+            )
+
+        if introspection.scope is None or not introspection.scope.strip():
+            logger.warning("oauth.introspect_missing_scope")
+            raise LinkedInScopeError(
+                "LinkedIn did not report granted scopes for the access token. "
+                "Scope verification is required before completing sign-in."
+            )
+
+        granted = parse_introspection_scopes(introspection.scope)
+        logger.info(
+            "oauth.scopes_from_introspection",
+            granted_scopes=sorted(granted),
+            granted_count=len(granted),
+        )
+        return granted
 
     async def _consume_state(self, *, state: str, browser_nonce: str) -> OAuthState:
         now = datetime.now(UTC)

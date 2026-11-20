@@ -13,9 +13,17 @@ class LinkedInTokenExchangeError(LinkedInIntegrationError):
     """Authorization-code exchange failed."""
 
 
+class LinkedInIntrospectionError(LinkedInIntegrationError):
+    """Token introspection failed or returned an unusable result."""
+
+
 class LinkedInUserInfoError(LinkedInIntegrationError):
     """Userinfo request failed or returned an unexpected payload."""
 
 
 class LinkedInOidcError(LinkedInIntegrationError):
     """ID token failed cryptographic or claim validation."""
+
+
+class LinkedInScopeError(LinkedInIntegrationError):
+    """Granted scopes could not be verified or do not meet requirements."""

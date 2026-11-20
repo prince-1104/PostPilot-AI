@@ -71,6 +71,9 @@ async def test_authorization_url_construction(
     assert query["client_id"] == [LINKEDIN_CLIENT_ID]
     assert query["redirect_uri"] == [LINKEDIN_REDIRECT_URI]
     assert query["scope"] == [LINKEDIN_SCOPES]
+    assert "%20" in start.authorization_url or "+" in start.authorization_url
+    assert "openid" in start.authorization_url
+    assert "w_member_social" in start.authorization_url
     assert query["state"] == [start.state]
     assert "client_secret" not in query
 
@@ -295,7 +298,7 @@ async def test_successful_user_creation_and_token_encryption(
     assert connection.encrypted_access_token is not None
     assert access not in connection.encrypted_access_token
     assert token_encryptor.decrypt(connection.encrypted_access_token) == access
-    assert connection.granted_scopes == LINKEDIN_SCOPES
+    assert set(connection.granted_scopes.split()) == set(LINKEDIN_SCOPES.split())
 
 
 @pytest.mark.asyncio

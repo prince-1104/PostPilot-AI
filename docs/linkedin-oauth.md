@@ -62,9 +62,13 @@ docker compose up -d --build --wait
 5. The API validates and atomically consumes the state, checks the nonce cookie, exchanges
    the code server-side, validates the OIDC ID token (JWKS signature, issuer, audience,
    expiry), calls userinfo, and verifies `userinfo.sub == id_token.sub`.
-6. The user is upserted by LinkedIn OIDC `sub` (not email). The access token is encrypted
+6. Granted scopes are verified explicitly. Token-exchange `scope` is parsed as a
+   space-delimited (URL-decoded) list. If LinkedIn omits `scope`, the API calls
+   `POST /oauth/v2/introspectToken` and parses its comma-delimited `scope`. Requested
+   scopes are never assumed granted.
+7. The user is upserted by LinkedIn OIDC `sub` (not email). The access token is encrypted
    with AES-256-GCM and stored. An opaque session cookie is issued.
-7. The browser is redirected to `{WEB_BASE_URL}/connections?oauth=success`. Tokens never
+8. The browser is redirected to `{WEB_BASE_URL}/connections?oauth=success`. Tokens never
    appear in the redirect URL.
 
 If the user is already signed in, reconnect is allowed only for the same LinkedIn
