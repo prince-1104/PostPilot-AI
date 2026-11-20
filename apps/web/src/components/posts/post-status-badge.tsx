@@ -7,6 +7,7 @@ const LABELS: Record<PostStatus, string> = {
   published: "Published",
   failed: "Failed",
   cancelled: "Cancelled",
+  requires_review: "Requires review",
 };
 
 export function PostStatusBadge({ status }: { status: PostStatus }) {
@@ -15,6 +16,8 @@ export function PostStatusBadge({ status }: { status: PostStatus }) {
       ? "secondary"
       : status === "published"
         ? "default"
-        : "outline";
+        : status === "requires_review" || status === "processing"
+          ? "outline"
+          : "outline";
   return <Badge variant={variant}>{LABELS[status]}</Badge>;
 }

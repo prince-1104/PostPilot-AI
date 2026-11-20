@@ -1,1 +1,1 @@
-"""Background task definitions. Intentionally empty in Phase 1."""
+"""Celery workers and beat schedules for background publishing."""

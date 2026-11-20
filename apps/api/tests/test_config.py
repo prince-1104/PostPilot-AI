@@ -23,6 +23,7 @@ REQUIRED_ENVIRONMENT = {
     "LINKEDIN_SCOPES": "openid profile email w_member_social",
     "TOKEN_ENCRYPTION_KEY": base64.b64encode(secrets.token_bytes(32)).decode(),
     "WEB_BASE_URL": "http://localhost:3000",
+    "REDIS_PASSWORD": "value-used-only-in-this-test",
 }
 
 

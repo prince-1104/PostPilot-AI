@@ -86,6 +86,10 @@ def settings_factory(unused_tcp_port: int, encryption_key_b64: str) -> SettingsF
             "cookie_secure": False,
             "session_ttl_seconds": 3600,
             "oauth_state_ttl_seconds": 600,
+            "redis_host": "127.0.0.1",
+            "redis_port": 6379,
+            "redis_password": secrets.token_hex(16),
+            "publish_provider": "fake",
         }
         values.update(overrides)
         return Settings(**values)

@@ -5,7 +5,8 @@ export type PostStatus =
   | "processing"
   | "published"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "requires_review";
 
 export interface ScheduledPost {
   id: string;
@@ -18,8 +19,29 @@ export interface ScheduledPost {
   createdAt: string;
   updatedAt: string;
   publishedAt: string | null;
+  linkedinPostUrn: string | null;
+  attemptCount: number;
+  nextAttemptAt: string | null;
+  lastErrorCode: string | null;
+  lastErrorAt: string | null;
+  publicationSimulated: boolean;
   connectionExpiresBeforeSchedule: boolean;
   connectionExpiryWarning: string | null;
+}
+
+export interface PublishAttempt {
+  id: string;
+  attemptNumber: number;
+  executionState: string;
+  startedAt: string;
+  requestStartedAt: string | null;
+  finishedAt: string | null;
+  providerHttpStatus: number | null;
+  errorCategory: string | null;
+  sanitizedErrorCode: string | null;
+  nextRetryAt: string | null;
+  providerPostUrn: string | null;
+  publicationSimulated: boolean;
 }
 
 export interface ScheduledPostList {
@@ -47,6 +69,7 @@ const POST_STATUSES: ReadonlySet<string> = new Set([
   "published",
   "failed",
   "cancelled",
+  "requires_review",
 ]);
 
 function requireString(value: unknown, field: string): string {
@@ -58,6 +81,10 @@ function requireString(value: unknown, field: string): string {
 
 function optionalString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+function optionalNumber(value: unknown, fallback = 0): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
 export function parseScheduledPost(payload: unknown): ScheduledPost {
@@ -86,8 +113,39 @@ export function parseScheduledPost(payload: unknown): ScheduledPost {
     createdAt: requireString(payload.created_at, "created_at"),
     updatedAt: requireString(payload.updated_at, "updated_at"),
     publishedAt: optionalString(payload.published_at),
+    linkedinPostUrn: optionalString(payload.linkedin_post_urn),
+    attemptCount: optionalNumber(payload.attempt_count),
+    nextAttemptAt: optionalString(payload.next_attempt_at),
+    lastErrorCode: optionalString(payload.last_error_code),
+    lastErrorAt: optionalString(payload.last_error_at),
+    publicationSimulated: Boolean(payload.publication_simulated),
     connectionExpiresBeforeSchedule: Boolean(payload.connection_expires_before_schedule),
     connectionExpiryWarning: optionalString(payload.connection_expiry_warning),
+  };
+}
+
+function parsePublishAttempt(payload: unknown): PublishAttempt {
+  if (!isRecord(payload)) {
+    throw new Error("Publish attempt response was not an object.");
+  }
+  const attemptNumber = payload.attempt_number;
+  if (typeof attemptNumber !== "number" || !Number.isInteger(attemptNumber)) {
+    throw new Error("Publish attempt missing attempt_number.");
+  }
+  return {
+    id: requireString(payload.id, "id"),
+    attemptNumber,
+    executionState: requireString(payload.execution_state, "execution_state"),
+    startedAt: requireString(payload.started_at, "started_at"),
+    requestStartedAt: optionalString(payload.request_started_at),
+    finishedAt: optionalString(payload.finished_at),
+    providerHttpStatus:
+      typeof payload.provider_http_status === "number" ? payload.provider_http_status : null,
+    errorCategory: optionalString(payload.error_category),
+    sanitizedErrorCode: optionalString(payload.sanitized_error_code),
+    nextRetryAt: optionalString(payload.next_retry_at),
+    providerPostUrn: optionalString(payload.provider_post_urn),
+    publicationSimulated: Boolean(payload.publication_simulated),
   };
 }
 
@@ -99,6 +157,13 @@ function parseScheduledPostList(payload: unknown): ScheduledPostList {
     items: payload.items.map(parseScheduledPost),
     nextCursor: typeof payload.next_cursor === "string" ? payload.next_cursor : null,
   };
+}
+
+function parseAttemptList(payload: unknown): PublishAttempt[] {
+  if (!isRecord(payload) || !Array.isArray(payload.items)) {
+    throw new Error("Publish attempt list response was invalid.");
+  }
+  return payload.items.map(parsePublishAttempt);
 }
 
 export interface ListPostsParams {
@@ -122,6 +187,16 @@ export async function listPosts(params: ListPostsParams = {}): Promise<Scheduled
 
 export async function getPost(postId: string, signal?: AbortSignal): Promise<ScheduledPost> {
   return apiGet(`/api/v1/posts/${postId}`, parseScheduledPost, {
+    credentials: "include",
+    signal,
+  });
+}
+
+export async function listPostAttempts(
+  postId: string,
+  signal?: AbortSignal,
+): Promise<PublishAttempt[]> {
+  return apiGet(`/api/v1/posts/${postId}/attempts`, parseAttemptList, {
     credentials: "include",
     signal,
   });

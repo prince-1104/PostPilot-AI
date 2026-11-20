@@ -31,7 +31,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Logo />
           </div>
           <Badge variant="outline" className="ml-auto text-muted-foreground">
-            Phase 3 · Scheduling
+            Phase 4A · Fake publish
           </Badge>
         </header>
 

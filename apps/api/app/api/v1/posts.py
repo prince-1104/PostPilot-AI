@@ -11,6 +11,7 @@ from app.core.errors import UnprocessableError
 from app.schemas.posts import (
     CancelScheduledPost,
     CreateScheduledPost,
+    PublishAttemptListResponse,
     ScheduledPostListResponse,
     ScheduledPostResponse,
     UpdateScheduledPost,
@@ -98,4 +99,16 @@ async def cancel_post(
         user=user,
         post_id=post_id,
         expected_version=body.expected_version,
+    )
+
+
+@router.get("/{post_id}/attempts", response_model=PublishAttemptListResponse)
+async def list_post_attempts(
+    post_id: UUID,
+    user: CurrentUserDep,
+    session: SessionDep,
+    settings: SettingsDep,
+) -> PublishAttemptListResponse:
+    return await PostService(session, settings=settings).list_attempts(
+        user=user, post_id=post_id
     )

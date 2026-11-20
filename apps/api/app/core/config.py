@@ -15,6 +15,7 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 Environment = Literal["local", "test", "staging", "production"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 LogFormat = Literal["json", "console"]
+PublishProvider = Literal["fake", "linkedin"]
 
 # Scopes PostPilot needs for sign-in and (later) publishing. Configuration that omits
 # any of these fails at startup so we never silently degrade authentication.
@@ -87,7 +88,38 @@ class Settings(BaseSettings):
     posts_page_size_default: int = Field(default=20, ge=1, le=100)
     posts_page_size_max: int = Field(default=50, ge=1, le=100)
 
-    @field_validator("postgres_password", "linkedin_client_secret", "token_encryption_key")
+    # Redis / Celery (Phase 4A). PostgreSQL remains the system of record.
+    redis_host: str = Field(default="127.0.0.1", min_length=1)
+    redis_port: int = Field(default=6379, ge=1, le=65535)
+    redis_password: SecretStr
+    redis_db: int = Field(default=0, ge=0, le=15)
+    celery_queue_publish: str = Field(default="publish", min_length=1)
+    celery_worker_concurrency: int = Field(default=2, ge=1, le=32)
+    celery_task_soft_time_limit_seconds: int = Field(default=55, ge=5, le=600)
+    celery_task_time_limit_seconds: int = Field(default=60, ge=10, le=900)
+    celery_broker_connection_retry_on_startup: bool = True
+    celery_broker_connection_max_retries: int = Field(default=10, ge=0, le=100)
+
+    # Publishing engine.
+    publish_provider: PublishProvider = "fake"
+    allow_fake_publisher_in_production: bool = False
+    fake_publish_default_scenario: str = Field(default="success", min_length=1)
+    dispatch_batch_size: int = Field(default=25, ge=1, le=200)
+    dispatch_lease_seconds: int = Field(default=30, ge=5, le=300)
+    processing_lease_seconds: int = Field(default=120, ge=30, le=1800)
+    publish_retry_initial_seconds: int = Field(default=30, ge=1, le=3600)
+    publish_retry_backoff_multiplier: float = Field(default=2.0, ge=1.0, le=10.0)
+    publish_retry_max_delay_seconds: int = Field(default=900, ge=1, le=86_400)
+    publish_retry_max_attempts: int = Field(default=5, ge=1, le=50)
+    publish_dispatcher_interval_seconds: int = Field(default=15, ge=5, le=300)
+    publish_recovery_interval_seconds: int = Field(default=30, ge=5, le=600)
+
+    @field_validator(
+        "postgres_password",
+        "linkedin_client_secret",
+        "token_encryption_key",
+        "redis_password",
+    )
     @classmethod
     def _require_secret(cls, value: SecretStr) -> SecretStr:
         if not value.get_secret_value():
@@ -147,9 +179,34 @@ class Settings(BaseSettings):
             raise ValueError("COOKIE_SECURE must be true when APP_ENV=production")
         return self
 
+    @model_validator(mode="after")
+    def _validate_publish_provider(self) -> Settings:
+        if (
+            self.publish_provider == "fake"
+            and self.app_env == "production"
+            and not self.allow_fake_publisher_in_production
+        ):
+            raise ValueError(
+                "PUBLISH_PROVIDER=fake requires ALLOW_FAKE_PUBLISHER_IN_PRODUCTION=true "
+                "when APP_ENV=production"
+            )
+        if self.celery_task_time_limit_seconds <= self.celery_task_soft_time_limit_seconds:
+            raise ValueError(
+                "CELERY_TASK_TIME_LIMIT_SECONDS must be greater than "
+                "CELERY_TASK_SOFT_TIME_LIMIT_SECONDS"
+            )
+        return self
+
     @property
     def linkedin_scope_list(self) -> list[str]:
         return self.linkedin_scopes.split()
+
+    @property
+    def celery_broker_url(self) -> str:
+        password = self.redis_password.get_secret_value()
+        return (
+            f"redis://:{password}@{self.redis_host}:{self.redis_port}/{self.redis_db}"
+        )
 
 
 def _validate_origin(origin: str) -> None:

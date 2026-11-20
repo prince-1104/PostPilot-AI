@@ -25,11 +25,13 @@ from app.core.errors import (
     VersionConflictError,
 )
 from app.core.timezones import assert_offset_matches_timezone, require_iana_timezone
-from app.models import LinkedInConnection, ScheduledPost, User
+from app.models import LinkedInConnection, PublishAttempt, ScheduledPost, User
 from app.models.enums import ConnectionStatus, PostStatus
 from app.repositories.posts import PostRepository
 from app.schemas.posts import (
     CreateScheduledPost,
+    PublishAttemptListResponse,
+    PublishAttemptResponse,
     ScheduledPostListResponse,
     ScheduledPostResponse,
     UpdateScheduledPost,
@@ -379,6 +381,7 @@ class PostService:
                     "Reconnect LinkedIn before the scheduled time. PostPilot cannot refresh "
                     "LinkedIn tokens automatically."
                 )
+        urn = post.linkedin_post_urn
         return ScheduledPostResponse(
             id=post.id,
             linkedin_connection_id=post.linkedin_connection_id,
@@ -390,8 +393,49 @@ class PostService:
             created_at=post.created_at,
             updated_at=post.updated_at,
             published_at=post.published_at,
+            linkedin_post_urn=urn,
+            attempt_count=post.attempt_count,
+            next_attempt_at=post.next_attempt_at,
+            last_error_code=post.last_error_code,
+            last_error_at=post.last_error_at,
+            publication_simulated=bool(urn and urn.startswith("urn:li:share:fake-")),
             connection_expires_before_schedule=expires_before,
             connection_expiry_warning=warning,
+        )
+
+    async def list_attempts(
+        self, *, user: User, post_id: UUID
+    ) -> PublishAttemptListResponse:
+        post = await self._repo.get_by_id_for_user(post_id=post_id, user_id=user.id)
+        if post is None:
+            raise NotFoundError("Post not found.")
+        result = await self._db.execute(
+            select(PublishAttempt)
+            .where(PublishAttempt.post_id == post.id)
+            .order_by(PublishAttempt.attempt_number.asc())
+        )
+        rows = list(result.scalars().all())
+        return PublishAttemptListResponse(
+            items=[
+                PublishAttemptResponse(
+                    id=row.id,
+                    attempt_number=row.attempt_number,
+                    execution_state=row.execution_state,
+                    started_at=row.started_at,
+                    request_started_at=row.request_started_at,
+                    finished_at=row.finished_at,
+                    provider_http_status=row.provider_http_status,
+                    error_category=row.error_category,
+                    sanitized_error_code=row.sanitized_error_code,
+                    next_retry_at=row.next_retry_at,
+                    provider_post_urn=row.provider_post_urn,
+                    publication_simulated=bool(
+                        row.provider_post_urn
+                        and row.provider_post_urn.startswith("urn:li:share:fake-")
+                    ),
+                )
+                for row in rows
+            ]
         )
 
 

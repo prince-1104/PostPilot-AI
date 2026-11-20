@@ -1,13 +1,14 @@
 # PostPilot AI
 
-A LinkedIn post scheduling application. This repository is at **Phase 3: scheduled post
-management**. LinkedIn OAuth, encrypted tokens, sessions, and timezone-aware scheduling
-(create / list / edit / cancel) are in place. Background publishing to LinkedIn and AI
-generation are not implemented yet.
+A LinkedIn post scheduling application. This repository is at **Phase 4A: reliable
+background publishing with a fake LinkedIn provider**. OAuth, scheduling, Celery workers,
+DB-backed dispatch/leases/retries, and simulated publication are in place. Real LinkedIn
+HTTP publishing and AI generation are not implemented yet.
 
 See [docs/implementation-status.md](docs/implementation-status.md) for exactly what is
-and is not built, [docs/scheduled-posts.md](docs/scheduled-posts.md) for the scheduling
-API and schema, [docs/linkedin-oauth.md](docs/linkedin-oauth.md) for OAuth setup, and
+and is not built, [docs/publishing-engine.md](docs/publishing-engine.md) for the worker
+architecture, [docs/scheduled-posts.md](docs/scheduled-posts.md) for the scheduling API,
+[docs/linkedin-oauth.md](docs/linkedin-oauth.md) for OAuth setup, and
 [docs/decisions/0001-architecture.md](docs/decisions/0001-architecture.md) for the
 reasoning behind the stack.
 
@@ -41,9 +42,9 @@ flowchart LR
 - **api** (`apps/api`) is a FastAPI application. Every route lives under `/api/v1`.
   Routes are thin; logic lives in `app/services`.
 - **postgres** is the single source of truth for all durable state.
-- **redis** is provisioned for the future Celery queue. No code connects to it yet.
-- **migrate** applies Alembic migrations before the API starts (users, LinkedIn
-  connections, auth sessions, OAuth states, and scheduled posts).
+- **redis** is the Celery broker. Queue messages are rebuildable from PostgreSQL leases.
+- **worker** / **beat** run Celery execute and periodic dispatch/recovery tasks.
+- **migrate** applies Alembic migrations before the API starts.
 
 ### Repository layout
 
@@ -130,6 +131,7 @@ docker compose up -d --build --wait
 | Web app | <http://localhost:3000> |
 | LinkedIn connections | <http://localhost:3000/connections> |
 | Scheduled posts | <http://localhost:3000/posts> |
+| Celery worker / beat | Compose services `worker` and `beat` |
 | API liveness | <http://localhost:8000/api/v1/health/live> |
 | API readiness (checks PostgreSQL) | <http://localhost:8000/api/v1/health/ready> |
 | Interactive API docs (disabled when `APP_ENV=production`) | <http://localhost:8000/api/v1/docs> |

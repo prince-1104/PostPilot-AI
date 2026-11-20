@@ -18,11 +18,14 @@ import { formatInTimezone } from "@/lib/timezone";
 const STATUS_FILTERS: Array<{ value: "" | PostStatus; label: string }> = [
   { value: "", label: "All" },
   { value: "scheduled", label: "Scheduled" },
-  { value: "cancelled", label: "Cancelled" },
   { value: "processing", label: "Processing" },
   { value: "published", label: "Published" },
   { value: "failed", label: "Failed" },
+  { value: "cancelled", label: "Cancelled" },
+  { value: "requires_review", label: "Requires review" },
 ];
+
+const POLL_MS = 5000;
 
 function preview(content: string, max = 140): string {
   const trimmed = content.trim();
@@ -43,30 +46,41 @@ export function PostsList() {
 
   useEffect(() => {
     const controller = new AbortController();
-    void listPosts({
-      status: status || undefined,
-      limit: 20,
-      signal: controller.signal,
-    })
-      .then((page) => {
-        if (controller.signal.aborted) return;
-        setItems(page.items);
-        setNextCursor(page.nextCursor);
-        setLoadState("ready");
-        setError(null);
+
+    function load(signal: AbortSignal) {
+      return listPosts({
+        status: status || undefined,
+        limit: 20,
+        signal,
       })
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
-        if (err instanceof ApiError && err.status === 401) {
-          setLoadState("signed_out");
-          setItems([]);
-          setNextCursor(null);
-          return;
-        }
-        setLoadState("error");
-        setError(err instanceof Error ? err.message : "Could not load posts.");
-      });
-    return () => controller.abort();
+        .then((page) => {
+          if (signal.aborted) return;
+          setItems(page.items);
+          setNextCursor(page.nextCursor);
+          setLoadState("ready");
+          setError(null);
+        })
+        .catch((err: unknown) => {
+          if (signal.aborted) return;
+          if (err instanceof ApiError && err.status === 401) {
+            setLoadState("signed_out");
+            setItems([]);
+            setNextCursor(null);
+            return;
+          }
+          setLoadState("error");
+          setError(err instanceof Error ? err.message : "Could not load posts.");
+        });
+    }
+
+    void load(controller.signal);
+    const timer = window.setInterval(() => {
+      void load(controller.signal);
+    }, POLL_MS);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+    };
   }, [status, reloadToken]);
 
   async function handleLoadMore() {
@@ -191,6 +205,14 @@ export function PostsList() {
                   </span>
                 </div>
                 <p className="whitespace-pre-wrap text-sm text-foreground">{preview(post.content)}</p>
+                {post.nextAttemptAt ? (
+                  <p className="text-xs text-muted-foreground">
+                    Next retry: {formatInTimezone(post.nextAttemptAt, post.timezone)}
+                  </p>
+                ) : null}
+                {post.publicationSimulated ? (
+                  <p className="text-xs text-muted-foreground">Simulated publication (Phase 4A)</p>
+                ) : null}
                 {post.connectionExpiryWarning ? (
                   <p className="text-xs text-amber-700 dark:text-amber-400">
                     {post.connectionExpiryWarning}

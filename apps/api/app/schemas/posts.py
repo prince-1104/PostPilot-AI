@@ -89,6 +89,13 @@ class ScheduledPostResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     published_at: datetime | None = None
+    linkedin_post_urn: str | None = None
+    attempt_count: int = 0
+    next_attempt_at: datetime | None = None
+    last_error_code: str | None = None
+    last_error_at: datetime | None = None
+    # True when linkedin_post_urn is a Phase 4A simulation URN.
+    publication_simulated: bool = False
     # Present when the LinkedIn access token expires before scheduled_at.
     connection_expires_before_schedule: bool = False
     connection_expiry_warning: str | None = None
@@ -99,3 +106,26 @@ class ScheduledPostListResponse(BaseModel):
 
     items: list[ScheduledPostResponse]
     next_cursor: str | None = None
+
+
+class PublishAttemptResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    attempt_number: int
+    execution_state: str
+    started_at: datetime
+    request_started_at: datetime | None = None
+    finished_at: datetime | None = None
+    provider_http_status: int | None = None
+    error_category: str | None = None
+    sanitized_error_code: str | None = None
+    next_retry_at: datetime | None = None
+    provider_post_urn: str | None = None
+    publication_simulated: bool = False
+
+
+class PublishAttemptListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[PublishAttemptResponse]

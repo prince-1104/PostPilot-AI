@@ -10,9 +10,13 @@ import { ApiError } from "@/lib/api/client";
 import {
   cancelPost,
   getPost,
+  listPostAttempts,
   updatePost,
+  type PublishAttempt,
   type ScheduledPost,
 } from "@/lib/api/posts";
+
+const POLL_MS = 4000;
 import {
   formatInTimezone,
   instantToWallLocalInput,
@@ -30,6 +34,7 @@ export function PostDetail({ postId }: { postId: string }) {
   const timezones = useMemo(() => listIanaTimezones(), []);
 
   const [post, setPost] = useState<ScheduledPost | null>(null);
+  const [attempts, setAttempts] = useState<PublishAttempt[]>([]);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "missing" | "error" | "signed_out">(
     "loading",
   );
@@ -42,17 +47,24 @@ export function PostDetail({ postId }: { postId: string }) {
 
   useEffect(() => {
     const controller = new AbortController();
-    void getPost(postId, controller.signal)
-      .then((data) => {
-        if (controller.signal.aborted) return;
+
+    async function refresh(signal: AbortSignal, initial: boolean) {
+      try {
+        const [data, history] = await Promise.all([
+          getPost(postId, signal),
+          listPostAttempts(postId, signal),
+        ]);
+        if (signal.aborted) return;
         setPost(data);
-        setContent(data.content);
-        setTimezone(data.timezone);
-        setLocalWhen(instantToWallLocalInput(data.scheduledAt, data.timezone));
+        setAttempts(history);
+        if (initial || !editing) {
+          setContent(data.content);
+          setTimezone(data.timezone);
+          setLocalWhen(instantToWallLocalInput(data.scheduledAt, data.timezone));
+        }
         setLoadState("ready");
-      })
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
+      } catch (err: unknown) {
+        if (signal.aborted) return;
         if (err instanceof ApiError && err.status === 401) {
           setLoadState("signed_out");
           return;
@@ -61,11 +73,22 @@ export function PostDetail({ postId }: { postId: string }) {
           setLoadState("missing");
           return;
         }
-        setLoadState("error");
-        setError(err instanceof Error ? err.message : "Could not load post.");
-      });
-    return () => controller.abort();
-  }, [postId]);
+        if (initial) {
+          setLoadState("error");
+          setError(err instanceof Error ? err.message : "Could not load post.");
+        }
+      }
+    }
+
+    void refresh(controller.signal, true);
+    const timer = window.setInterval(() => {
+      void refresh(controller.signal, false);
+    }, POLL_MS);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+    };
+  }, [postId, editing]);
 
   async function handleSave() {
     if (!post) return;
@@ -255,14 +278,90 @@ export function PostDetail({ postId }: { postId: string }) {
               <dt className="text-muted-foreground">Updated</dt>
               <dd>{formatInTimezone(post.updatedAt, post.timezone)}</dd>
             </div>
+            <div>
+              <dt className="text-muted-foreground">Attempts</dt>
+              <dd>{post.attemptCount}</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Next retry</dt>
+              <dd>
+                {post.nextAttemptAt
+                  ? formatInTimezone(post.nextAttemptAt, post.timezone)
+                  : "—"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Published at</dt>
+              <dd>
+                {post.publishedAt ? formatInTimezone(post.publishedAt, post.timezone) : "—"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Provider URN</dt>
+              <dd className="font-mono text-xs">{post.linkedinPostUrn ?? "—"}</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Last error</dt>
+              <dd>{post.lastErrorCode ?? "—"}</dd>
+            </div>
           </dl>
         </div>
       )}
 
-      <div className="rounded-lg border border-dashed border-border px-4 py-3 text-sm text-muted-foreground">
-        Publication history and LinkedIn delivery details are not available until Phase 4
-        (background publishing). This phase only creates, edits, and cancels scheduled posts.
-      </div>
+      {post.status === "requires_review" ? (
+        <p
+          className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-100"
+          role="status"
+        >
+          This post needs manual review. Publication may already have succeeded externally, so
+          PostPilot will not automatically resubmit it. There is no Retry Now action for this state.
+        </p>
+      ) : null}
+
+      {post.publicationSimulated ? (
+        <p className="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+          This result came from the Phase 4A <strong>fake LinkedIn publisher</strong>. It is not a
+          real LinkedIn post.
+        </p>
+      ) : null}
+
+      <section className="flex flex-col gap-3">
+        <h2 className="font-heading text-lg font-medium">Publishing attempts</h2>
+        {attempts.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No publish attempts yet.</p>
+        ) : (
+          <ol className="divide-y divide-border rounded-lg border border-border">
+            {attempts.map((attempt) => (
+              <li key={attempt.id} className="space-y-1 px-4 py-3 text-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">Attempt {attempt.attemptNumber}</span>
+                  <span className="text-muted-foreground">{attempt.executionState}</span>
+                  {attempt.publicationSimulated ? (
+                    <span className="text-xs text-muted-foreground">simulated</span>
+                  ) : null}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Started {formatInTimezone(attempt.startedAt, post.timezone)}
+                  {attempt.finishedAt
+                    ? ` · Finished ${formatInTimezone(attempt.finishedAt, post.timezone)}`
+                    : ""}
+                </p>
+                {attempt.sanitizedErrorCode ? (
+                  <p className="text-xs">Error: {attempt.sanitizedErrorCode}</p>
+                ) : null}
+                {attempt.nextRetryAt ? (
+                  <p className="text-xs">
+                    Retry at {formatInTimezone(attempt.nextRetryAt, post.timezone)}
+                  </p>
+                ) : null}
+                {attempt.providerPostUrn ? (
+                  <p className="font-mono text-xs">{attempt.providerPostUrn}</p>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+        )}
+      </section>
 
       {error ? (
         <p className="text-sm text-destructive" role="alert">

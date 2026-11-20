@@ -32,6 +32,18 @@ class ScheduledPost(Base):
         Index("ix_scheduled_posts_status_scheduled_at", "status", "scheduled_at"),
         Index("ix_scheduled_posts_user_id_scheduled_at", "user_id", "scheduled_at"),
         Index(
+            "ix_scheduled_posts_dispatch",
+            "status",
+            "scheduled_at",
+            "next_attempt_at",
+            "dispatch_lease_until",
+        ),
+        Index(
+            "ix_scheduled_posts_processing_lease",
+            "status",
+            "processing_lease_until",
+        ),
+        Index(
             "uq_scheduled_posts_linkedin_post_urn",
             "linkedin_post_urn",
             unique=True,
@@ -73,7 +85,25 @@ class ScheduledPost(Base):
     )
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Phase 4A publishing control fields.
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    dispatch_lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    processing_lease_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    current_attempt_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     user: Mapped[User] = relationship(back_populates="scheduled_posts")  # noqa: F821
     linkedin_connection: Mapped[LinkedInConnection] = relationship(  # noqa: F821
         lazy="selectin",
+    )
+    publish_attempts: Mapped[list[PublishAttempt]] = relationship(  # noqa: F821
+        back_populates="post",
+        lazy="selectin",
+        order_by="PublishAttempt.attempt_number",
     )
