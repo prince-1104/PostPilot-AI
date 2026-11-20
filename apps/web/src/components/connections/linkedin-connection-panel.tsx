@@ -153,8 +153,8 @@ export function LinkedInConnectionPanel() {
         <CardHeader>
           <CardTitle>LinkedIn account</CardTitle>
           <CardDescription>
-            Connect the LinkedIn identity PostPilot will use for sign-in. Publishing is not
-            enabled yet.
+            Connect the LinkedIn identity PostPilot uses for sign-in and scheduling. Automatic
+            publishing to LinkedIn is not enabled yet.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">

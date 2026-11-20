@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 
 import { AccountSection } from "@/components/layout/account-section";
 import { Logo } from "@/components/layout/logo";
@@ -15,19 +15,23 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Logo />
         </div>
         <div className="flex-1 overflow-y-auto px-3 py-4">
-          <SidebarNav />
+          <Suspense fallback={null}>
+            <SidebarNav />
+          </Suspense>
         </div>
         <AccountSection />
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b bg-background/80 px-4 backdrop-blur-sm lg:px-8">
-          <MobileNav />
+          <Suspense fallback={null}>
+            <MobileNav />
+          </Suspense>
           <div className="lg:hidden">
             <Logo />
           </div>
           <Badge variant="outline" className="ml-auto text-muted-foreground">
-            Phase 2 · Auth
+            Phase 3 · Scheduling
           </Badge>
         </header>
 

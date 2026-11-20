@@ -3,6 +3,7 @@ import { apiGet, apiPost, isRecord } from "@/lib/api/client";
 export interface LinkedInConnection {
   connected: boolean;
   connectionStatus: string;
+  id: string | null;
   displayName: string | null;
   avatarUrl: string | null;
   grantedScopes: string[];
@@ -18,6 +19,7 @@ export function parseLinkedInConnection(payload: unknown): LinkedInConnection {
   const {
     connected,
     connection_status,
+    id,
     display_name,
     avatar_url,
     granted_scopes,
@@ -33,6 +35,7 @@ export function parseLinkedInConnection(payload: unknown): LinkedInConnection {
   return {
     connected,
     connectionStatus: connection_status,
+    id: typeof id === "string" ? id : null,
     displayName: typeof display_name === "string" ? display_name : null,
     avatarUrl: typeof avatar_url === "string" ? avatar_url : null,
     grantedScopes: Array.isArray(granted_scopes)

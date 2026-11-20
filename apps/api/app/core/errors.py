@@ -66,6 +66,28 @@ class OriginRejectedError(AppError):
     code = "origin_rejected"
 
 
+class NotFoundError(AppError):
+    status_code = HTTPStatus.NOT_FOUND
+    code = "not_found"
+
+
+class IdempotencyConflictError(ConflictError):
+    code = "idempotency_conflict"
+
+
+class VersionConflictError(ConflictError):
+    code = "version_conflict"
+
+
+class InvalidStateError(ConflictError):
+    code = "invalid_state"
+
+
+class UnprocessableError(AppError):
+    status_code = HTTPStatus.UNPROCESSABLE_CONTENT
+    code = "unprocessable"
+
+
 def build_error_response(
     *,
     status_code: int,

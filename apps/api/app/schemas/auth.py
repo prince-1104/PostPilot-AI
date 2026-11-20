@@ -21,6 +21,8 @@ class LinkedInConnectionResponse(BaseModel):
 
     connected: bool
     connection_status: str
+    # Present when a LinkedIn connection row exists (including reauth / disconnected).
+    id: UUID | None = None
     display_name: str | None = None
     avatar_url: str | None = None
     granted_scopes: list[str] = Field(default_factory=list)

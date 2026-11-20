@@ -157,3 +157,58 @@ export async function apiPostEmpty(
     throw toApiError(response.status, payload);
   }
 }
+
+interface JsonRequestOptions extends RequestOptions {
+  body?: unknown;
+  headers?: Record<string, string>;
+}
+
+export async function apiPostJson<T>(
+  path: string,
+  parse: (payload: unknown) => T,
+  options: JsonRequestOptions = {},
+): Promise<T> {
+  const response = await fetch(`${env.apiBaseUrl}${path}`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    cache: "no-store",
+    credentials: options.credentials ?? "include",
+    signal: options.signal ?? null,
+  });
+
+  const payload = await parseJson(response);
+  if (!response.ok) {
+    throw toApiError(response.status, payload);
+  }
+  return parse(payload);
+}
+
+export async function apiPatchJson<T>(
+  path: string,
+  parse: (payload: unknown) => T,
+  options: JsonRequestOptions = {},
+): Promise<T> {
+  const response = await fetch(`${env.apiBaseUrl}${path}`, {
+    method: "PATCH",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    cache: "no-store",
+    credentials: options.credentials ?? "include",
+    signal: options.signal ?? null,
+  });
+
+  const payload = await parseJson(response);
+  if (!response.ok) {
+    throw toApiError(response.status, payload);
+  }
+  return parse(payload);
+}

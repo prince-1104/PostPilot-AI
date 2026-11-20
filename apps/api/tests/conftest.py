@@ -226,8 +226,35 @@ async def seed_user_with_session(
     display_name: str = "Ada Lovelace",
     with_connection: bool = True,
     token_expired: bool = False,
+    granted_scopes: str = LINKEDIN_SCOPES,
+    token_expires_at: datetime | None = None,
 ) -> tuple[User, str]:
     """Insert a user (and optional connection) and return ``(user, raw_session_token)``."""
+    user, raw_token, _connection = await seed_user_session_and_connection(
+        session,
+        encryptor=encryptor,
+        subject=subject,
+        display_name=display_name,
+        with_connection=with_connection,
+        token_expired=token_expired,
+        granted_scopes=granted_scopes,
+        token_expires_at=token_expires_at,
+    )
+    return user, raw_token
+
+
+async def seed_user_session_and_connection(
+    session: AsyncSession,
+    *,
+    encryptor: TokenEncryptor,
+    subject: str = "linkedin-sub-1",
+    display_name: str = "Ada Lovelace",
+    with_connection: bool = True,
+    token_expired: bool = False,
+    granted_scopes: str = LINKEDIN_SCOPES,
+    token_expires_at: datetime | None = None,
+) -> tuple[User, str, LinkedInConnection | None]:
+    """Insert a user, session, and optional connection; return all three."""
     now = datetime.now(UTC)
     user = User(
         id=uuid4(),
@@ -241,25 +268,30 @@ async def seed_user_with_session(
     session.add(user)
     await session.flush()
 
+    connection: LinkedInConnection | None = None
     if with_connection:
-        expires = now - timedelta(hours=1) if token_expired else now + timedelta(days=30)
-        session.add(
-            LinkedInConnection(
-                id=uuid4(),
-                user_id=user.id,
-                provider_subject=subject,
-                encrypted_access_token=encryptor.encrypt("linkedin-access-token"),
-                token_expires_at=expires,
-                granted_scopes=LINKEDIN_SCOPES,
-                connection_status=(
-                    ConnectionStatus.REAUTH_REQUIRED.value
-                    if token_expired
-                    else ConnectionStatus.CONNECTED.value
-                ),
-                created_at=now,
-                updated_at=now,
-            )
+        if token_expires_at is not None:
+            expires = token_expires_at
+        elif token_expired:
+            expires = now - timedelta(hours=1)
+        else:
+            expires = now + timedelta(days=30)
+        connection = LinkedInConnection(
+            id=uuid4(),
+            user_id=user.id,
+            provider_subject=subject,
+            encrypted_access_token=encryptor.encrypt("linkedin-access-token"),
+            token_expires_at=expires,
+            granted_scopes=granted_scopes,
+            connection_status=(
+                ConnectionStatus.REAUTH_REQUIRED.value
+                if token_expired
+                else ConnectionStatus.CONNECTED.value
+            ),
+            created_at=now,
+            updated_at=now,
         )
+        session.add(connection)
 
     raw_token = secrets.token_urlsafe(32)
     session.add(
@@ -273,7 +305,7 @@ async def seed_user_with_session(
         )
     )
     await session.commit()
-    return user, raw_token
+    return user, raw_token, connection
 
 
 def session_cookie_header(raw_token: str) -> dict[str, str]:

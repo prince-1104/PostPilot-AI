@@ -1,12 +1,13 @@
 # PostPilot AI
 
-A LinkedIn post scheduling application. This repository is at **Phase 2: LinkedIn OAuth
-and secure account connection**. The local stack, health endpoints, LinkedIn OAuth
-sign-in, encrypted token storage, and application sessions are in place. Scheduling,
-publishing, and AI generation are not implemented yet.
+A LinkedIn post scheduling application. This repository is at **Phase 3: scheduled post
+management**. LinkedIn OAuth, encrypted tokens, sessions, and timezone-aware scheduling
+(create / list / edit / cancel) are in place. Background publishing to LinkedIn and AI
+generation are not implemented yet.
 
 See [docs/implementation-status.md](docs/implementation-status.md) for exactly what is
-and is not built, [docs/linkedin-oauth.md](docs/linkedin-oauth.md) for OAuth setup, and
+and is not built, [docs/scheduled-posts.md](docs/scheduled-posts.md) for the scheduling
+API and schema, [docs/linkedin-oauth.md](docs/linkedin-oauth.md) for OAuth setup, and
 [docs/decisions/0001-architecture.md](docs/decisions/0001-architecture.md) for the
 reasoning behind the stack.
 
@@ -42,7 +43,7 @@ flowchart LR
 - **postgres** is the single source of truth for all durable state.
 - **redis** is provisioned for the future Celery queue. No code connects to it yet.
 - **migrate** applies Alembic migrations before the API starts (users, LinkedIn
-  connections, auth sessions, and OAuth states).
+  connections, auth sessions, OAuth states, and scheduled posts).
 
 ### Repository layout
 
@@ -57,9 +58,10 @@ apps/
       api/v1/           HTTP routes
       core/             config, logging, errors, middleware
       db/               SQLAlchemy base and engine/session factory
-      models/           ORM models (users, sessions, LinkedIn connections)
+      models/           ORM models (users, sessions, LinkedIn, scheduled posts)
       schemas/          Pydantic request/response models
-      services/         Business logic (OAuth, sessions, connections)
+      services/         Business logic (OAuth, sessions, connections, posts)
+      repositories/     Persistence helpers (posts)
       integrations/     LinkedIn OAuth/OIDC client
       workers/          Background tasks (empty until publishing)
     alembic/            Async migration environment
@@ -127,6 +129,7 @@ docker compose up -d --build --wait
 | --- | --- |
 | Web app | <http://localhost:3000> |
 | LinkedIn connections | <http://localhost:3000/connections> |
+| Scheduled posts | <http://localhost:3000/posts> |
 | API liveness | <http://localhost:8000/api/v1/health/live> |
 | API readiness (checks PostgreSQL) | <http://localhost:8000/api/v1/health/ready> |
 | Interactive API docs (disabled when `APP_ENV=production`) | <http://localhost:8000/api/v1/docs> |
@@ -208,10 +211,11 @@ uv run ruff format --check .    # formatting
 uv run pytest                   # unit tests; no database or network needed
 ```
 
-The unit tests cover liveness, readiness success and failure, configuration validation,
-the error envelope, request IDs, CORS, and log redaction.
+The unit tests cover health, OAuth/sessions, scheduled posts (idempotency, timezone,
+concurrency conflicts), configuration, the error envelope, request IDs, CORS, and log
+redaction.
 
-One integration test runs against a real PostgreSQL. It is excluded by default and needs
+Integration tests run against a real PostgreSQL. They are excluded by default and need
 the host-dev override from the previous section:
 
 ```sh
@@ -245,7 +249,10 @@ Every variable is documented in [.env.example](.env.example). In summary:
 | `REDIS_PASSWORD` | Yes, secret | No default. Used by the Redis container only. |
 | `NEXT_PUBLIC_API_BASE_URL` | Yes | API origin as seen by the browser. Inlined at build time. |
 | `API_PORT`, `WEB_PORT` | No (`8000`, `3000`) | Ports published on `127.0.0.1` |
-| `LINKEDIN_*`, `TOKEN_ENCRYPTION_KEY` | No | Reserved for a later phase. Nothing reads them yet. |
+| `LINKEDIN_*`, `TOKEN_ENCRYPTION_KEY`, `WEB_BASE_URL` | Yes for OAuth | LinkedIn app + AES key + post-OAuth redirect origin |
+| `SCHEDULE_MIN_LEAD_SECONDS` | No (`60`) | Minimum delay before a post may be scheduled |
+| `POST_CONTENT_MAX_LENGTH` | No (`3000`) | Max accepted post body length |
+| `POSTS_PAGE_SIZE_DEFAULT` / `MAX` | No (`20` / `50`) | List pagination bounds |
 
 If you change `WEB_PORT`, add the new origin to `CORS_ALLOWED_ORIGINS`. If you change
 `API_PORT`, update `NEXT_PUBLIC_API_BASE_URL` and rebuild the web image.

@@ -15,9 +15,8 @@ export default function DashboardPage() {
       <header className="flex flex-col gap-2">
         <h1 className="font-heading text-2xl font-semibold tracking-tight">Dashboard</h1>
         <p className="max-w-2xl text-muted-foreground">
-          PostPilot AI can connect a LinkedIn account over OAuth. Scheduling, publishing, and
-          the AI writing assistant are not implemented yet, so there is no post or publishing
-          data to show.
+          PostPilot AI connects a LinkedIn account and lets you schedule posts for later.
+          Background publishing to LinkedIn and the AI writing assistant are not implemented yet.
         </p>
       </header>
 
@@ -36,7 +35,7 @@ export default function DashboardPage() {
             Planned features
           </h2>
           <p className="text-sm text-muted-foreground">
-            Scheduled for later phases. None of these work today.
+            Scheduling is available now. Publishing workers and AI assistance come later.
           </p>
         </div>
         <PlannedFeatures />

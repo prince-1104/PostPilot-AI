@@ -18,7 +18,7 @@ export interface NavItem {
 export const NAV_ITEMS: readonly NavItem[] = [
   { label: "Dashboard", icon: LayoutDashboard, href: "/" },
   { label: "Connections", icon: UserRoundCheck, href: "/connections" },
-  { label: "Posts", icon: CalendarClock },
+  { label: "Posts", icon: CalendarClock, href: "/posts" },
   { label: "AI assistant", icon: Sparkles },
   { label: "Monitoring", icon: Activity },
 ];

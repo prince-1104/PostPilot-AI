@@ -1,0 +1,101 @@
+"""Scheduled post request and response models."""
+
+from datetime import datetime
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class CreateScheduledPost(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=1)
+    scheduled_at: datetime
+    timezone: str = Field(min_length=1, max_length=64)
+    linkedin_connection_id: UUID
+
+    @field_validator("content")
+    @classmethod
+    def _strip_content(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("content must not be blank")
+        return stripped
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def _require_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("scheduled_at must be timezone-aware (include an offset)")
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def _strip_timezone(cls, value: str) -> str:
+        return value.strip()
+
+
+class UpdateScheduledPost(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1)
+    content: str | None = Field(default=None, min_length=1)
+    scheduled_at: datetime | None = None
+    timezone: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @field_validator("content")
+    @classmethod
+    def _strip_content(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("content must not be blank")
+        return stripped
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def _require_aware(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("scheduled_at must be timezone-aware (include an offset)")
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def _strip_timezone(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip()
+
+
+class CancelScheduledPost(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1)
+
+
+class ScheduledPostResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    linkedin_connection_id: UUID
+    content: str
+    scheduled_at: datetime
+    timezone: str
+    status: str
+    version: int
+    created_at: datetime
+    updated_at: datetime
+    published_at: datetime | None = None
+    # Present when the LinkedIn access token expires before scheduled_at.
+    connection_expires_before_schedule: bool = False
+    connection_expiry_warning: str | None = None
+
+
+class ScheduledPostListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ScheduledPostResponse]
+    next_cursor: str | None = None

@@ -32,10 +32,19 @@ class ConnectionService:
             select(LinkedInConnection).where(LinkedInConnection.user_id == user.id)
         )
         connection = result.scalar_one_or_none()
-        if connection is None or connection.connection_status == ConnectionStatus.DISCONNECTED:
+        if connection is None:
             return LinkedInConnectionResponse(
                 connected=False,
                 connection_status=ConnectionStatus.DISCONNECTED.value,
+                reauthorization_required=False,
+            )
+        if connection.connection_status == ConnectionStatus.DISCONNECTED:
+            return LinkedInConnectionResponse(
+                connected=False,
+                connection_status=ConnectionStatus.DISCONNECTED.value,
+                id=connection.id,
+                display_name=user.display_name,
+                avatar_url=user.avatar_url,
                 reauthorization_required=False,
             )
 
@@ -52,6 +61,7 @@ class ConnectionService:
         return LinkedInConnectionResponse(
             connected=not reauth and connection.encrypted_access_token is not None,
             connection_status=status,
+            id=connection.id,
             display_name=user.display_name,
             avatar_url=user.avatar_url,
             granted_scopes=scopes,
@@ -91,9 +101,14 @@ class ConnectionService:
             connection.connection_status = ConnectionStatus.DISCONNECTED.value
             connection.updated_at = now
         await self._db.commit()
+        result = await self._db.execute(
+            select(LinkedInConnection).where(LinkedInConnection.user_id == user.id)
+        )
+        connection = result.scalar_one_or_none()
         return LinkedInConnectionResponse(
             connected=False,
             connection_status=ConnectionStatus.DISCONNECTED.value,
+            id=connection.id if connection is not None else None,
             display_name=user.display_name,
             avatar_url=user.avatar_url,
             granted_scopes=[],

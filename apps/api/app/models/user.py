@@ -37,3 +37,7 @@ class User(Base):
         back_populates="user",
         lazy="selectin",
     )
+    scheduled_posts: Mapped[list[ScheduledPost]] = relationship(  # noqa: F821
+        back_populates="user",
+        lazy="selectin",
+    )

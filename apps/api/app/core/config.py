@@ -79,6 +79,14 @@ class Settings(BaseSettings):
     oauth_state_ttl_seconds: int = Field(default=600, ge=60, le=3600)
     linkedin_http_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
 
+    # Minimum lead time before a post may be scheduled (avoids near-immediate races).
+    # Documented default: 60 seconds.
+    schedule_min_lead_seconds: int = Field(default=60, ge=0, le=3600)
+    # LinkedIn UGC/share text posts accept up to 3000 characters of commentary.
+    post_content_max_length: int = Field(default=3000, ge=1, le=10000)
+    posts_page_size_default: int = Field(default=20, ge=1, le=100)
+    posts_page_size_max: int = Field(default=50, ge=1, le=100)
+
     @field_validator("postgres_password", "linkedin_client_secret", "token_encryption_key")
     @classmethod
     def _require_secret(cls, value: SecretStr) -> SecretStr:
