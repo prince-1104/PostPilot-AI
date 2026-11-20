@@ -1,7 +1,13 @@
-# Safe live LinkedIn E2E verification (Phase 4C)
+# Safe live LinkedIn E2E verification
 
 **Do not run the enable/publish steps automatically.** This document is a manual
-operator checklist. Automated tests use the fake provider and mocked HTTP only.
+operator checklist for publishing to your **real LinkedIn profile**. Automated tests
+keep using the fake provider and mocked HTTP only.
+
+Author identity: PostPilot builds `urn:li:person:{oidc_sub}` from the Sign In with
+LinkedIn userinfo `sub` claim (documented LinkedIn self-serve flow). If LinkedIn
+returns 403 on author, reconnect with `w_member_social` and inspect readiness —
+do not invent a member ID.
 
 ## Safety model
 

@@ -4,7 +4,7 @@ import { AccountSection } from "@/components/layout/account-section";
 import { Logo } from "@/components/layout/logo";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
-import { Badge } from "@/components/ui/badge";
+import { ProviderStatusBadge } from "@/components/publishing/provider-status-badge";
 
 /** Persistent frame around every page: sidebar on large screens, drawer on small ones. */
 export function AppShell({ children }: { children: ReactNode }) {
@@ -30,9 +30,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="lg:hidden">
             <Logo />
           </div>
-          <Badge variant="outline" className="ml-auto text-muted-foreground">
-            Phase 4A · Fake publish
-          </Badge>
+          <Suspense fallback={null}>
+            <ProviderStatusBadge />
+          </Suspense>
         </header>
 
         <main className="flex-1 px-4 py-8 sm:px-6 lg:px-8 lg:py-10">

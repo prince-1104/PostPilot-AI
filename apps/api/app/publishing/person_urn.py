@@ -1,8 +1,10 @@
 """Resolve LinkedIn person author URNs from stored OIDC identity.
 
-With Sign In with LinkedIn (OpenID Connect), the userinfo ``sub`` claim is the
-member identifier used to construct ``urn:li:person:{sub}``. This avoids the
-restricted ``/v2/me`` endpoint. Organization URNs are never accepted.
+With Sign In with LinkedIn (OpenID Connect) + Share on LinkedIn, Microsoft's
+documented self-serve flow uses the userinfo ``sub`` claim as the member id for
+``urn:li:person:{sub}`` on the Posts API. This avoids restricted ``/v2/me``.
+Organization URNs are never accepted. If LinkedIn rejects the author (e.g. 403),
+surface the sanitized error and require reconnection — never invent a member id.
 """
 
 from __future__ import annotations

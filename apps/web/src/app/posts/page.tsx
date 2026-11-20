@@ -13,8 +13,9 @@ export default function PostsPage() {
       <header className="flex flex-col gap-2">
         <h1 className="font-heading text-2xl font-semibold tracking-tight">Posts</h1>
         <p className="max-w-2xl text-muted-foreground">
-          Schedule LinkedIn posts for a future time. Publishing to LinkedIn happens in a later
-          phase; here you create, edit, and cancel scheduled drafts.
+          Create, edit, and schedule LinkedIn posts. When real publishing is enabled and a post is
+          canary-approved, Celery publishes it to your connected LinkedIn account. Historical
+          simulation results are labeled separately from genuine LinkedIn publications.
         </p>
       </header>
       <Suspense fallback={<p className="text-sm text-muted-foreground">Loading posts…</p>}>

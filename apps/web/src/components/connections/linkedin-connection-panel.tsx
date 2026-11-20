@@ -21,6 +21,10 @@ import {
   getLinkedInConnection,
   type LinkedInConnection,
 } from "@/lib/api/connections";
+import {
+  getPublishingReadiness,
+  type PublishingReadiness,
+} from "@/lib/api/publishing";
 
 type LoadState = "loading" | "signed_out" | "ready" | "error";
 
@@ -28,6 +32,7 @@ interface PanelData {
   loadState: LoadState;
   user: UserProfile | null;
   connection: LinkedInConnection | null;
+  readiness: PublishingReadiness | null;
   error: string | null;
 }
 
@@ -35,6 +40,7 @@ const INITIAL: PanelData = {
   loadState: "loading",
   user: null,
   connection: null,
+  readiness: null,
   error: null,
 };
 
@@ -51,16 +57,32 @@ function formatExpiry(iso: string | null): string {
 async function loadPanel(signal: AbortSignal): Promise<PanelData> {
   try {
     const me = await getMe(signal);
-    const status = await getLinkedInConnection(signal);
-    return { loadState: "ready", user: me, connection: status, error: null };
+    const [status, readiness] = await Promise.all([
+      getLinkedInConnection(signal),
+      getPublishingReadiness(null, signal),
+    ]);
+    return {
+      loadState: "ready",
+      user: me,
+      connection: status,
+      readiness,
+      error: null,
+    };
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) {
-      return { loadState: "signed_out", user: null, connection: null, error: null };
+      return {
+        loadState: "signed_out",
+        user: null,
+        connection: null,
+        readiness: null,
+        error: null,
+      };
     }
     return {
       loadState: "error",
       user: null,
       connection: null,
+      readiness: null,
       error: err instanceof Error ? err.message : "Could not load connection status.",
     };
   }
@@ -90,7 +112,13 @@ export function LinkedInConnectionPanel() {
     setActionError(null);
     try {
       await logout();
-      setData({ loadState: "signed_out", user: null, connection: null, error: null });
+      setData({
+        loadState: "signed_out",
+        user: null,
+        connection: null,
+        readiness: null,
+        error: null,
+      });
       router.replace("/connections");
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Logout failed.");
@@ -112,14 +140,22 @@ export function LinkedInConnectionPanel() {
     setActionError(null);
     try {
       const status = await disconnectLinkedIn();
+      const readiness = await getPublishingReadiness();
       setData((current) => ({
         ...current,
         connection: status,
+        readiness,
         loadState: "ready",
       }));
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
-        setData({ loadState: "signed_out", user: null, connection: null, error: null });
+        setData({
+          loadState: "signed_out",
+          user: null,
+          connection: null,
+          readiness: null,
+          error: null,
+        });
       } else {
         setActionError(err instanceof Error ? err.message : "Disconnect failed.");
       }
@@ -128,7 +164,7 @@ export function LinkedInConnectionPanel() {
     }
   }
 
-  const { loadState, user, connection, error } = data;
+  const { loadState, user, connection, readiness, error } = data;
 
   return (
     <div className="flex flex-col gap-6">
@@ -267,6 +303,56 @@ export function LinkedInConnectionPanel() {
                   &quot;Publishing verified&quot; appears only after PostPilot persists a real
                   LinkedIn post URN from a successful API publish — not from OAuth alone.
                 </p>
+              ) : null}
+
+              {readiness ? (
+                <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-sm">
+                  <p className="font-medium">Live publishing configuration</p>
+                  <dl className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <div>
+                      <dt className="text-muted-foreground">Provider</dt>
+                      <dd className="font-mono text-xs">{readiness.publishProvider}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">Real publishing</dt>
+                      <dd>{readiness.enableRealPublishing ? "Enabled" : "Disabled"}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">Canary gate</dt>
+                      <dd>
+                        {readiness.livePublishRequireCanary
+                          ? readiness.canaryPostIds.length > 0
+                            ? `${readiness.canaryPostIds.length} approved ID(s)`
+                            : "Required · no IDs approved"
+                          : "Disabled"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">API version</dt>
+                      <dd className="font-mono text-xs">{readiness.linkedinApiVersion}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">Pending scheduled</dt>
+                      <dd>{readiness.pendingScheduledPosts}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">Pending outside canary</dt>
+                      <dd>{readiness.pendingScheduledNonCanary}</dd>
+                    </div>
+                  </dl>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Configured: {readiness.configured ? "yes" : "no"} · Ready for live test:{" "}
+                    {readiness.readyForTest ? "yes" : "no"} · Verified by real publish:{" "}
+                    {readiness.publishingVerified ? "yes" : "no"}
+                  </p>
+                  {readiness.pendingScheduledNonCanary > 0 &&
+                  readiness.publishProvider === "linkedin" ? (
+                    <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+                      {readiness.pendingScheduledNonCanary} scheduled post(s) are blocked by the
+                      canary allowlist and will not be sent to LinkedIn.
+                    </p>
+                  ) : null}
+                </div>
               ) : null}
 
               {connection.reauthorizationRequired ? (

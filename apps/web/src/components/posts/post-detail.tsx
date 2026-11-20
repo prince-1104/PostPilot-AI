@@ -15,6 +15,10 @@ import {
   type PublishAttempt,
   type ScheduledPost,
 } from "@/lib/api/posts";
+import {
+  getPublishingReadiness,
+  type PublishingReadiness,
+} from "@/lib/api/publishing";
 
 const POLL_MS = 4000;
 import {
@@ -35,6 +39,7 @@ export function PostDetail({ postId }: { postId: string }) {
 
   const [post, setPost] = useState<ScheduledPost | null>(null);
   const [attempts, setAttempts] = useState<PublishAttempt[]>([]);
+  const [readiness, setReadiness] = useState<PublishingReadiness | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "missing" | "error" | "signed_out">(
     "loading",
   );
@@ -50,13 +55,15 @@ export function PostDetail({ postId }: { postId: string }) {
 
     async function refresh(signal: AbortSignal, initial: boolean) {
       try {
-        const [data, history] = await Promise.all([
+        const [data, history, publishing] = await Promise.all([
           getPost(postId, signal),
           listPostAttempts(postId, signal),
+          getPublishingReadiness(postId, signal),
         ]);
         if (signal.aborted) return;
         setPost(data);
         setAttempts(history);
+        setReadiness(publishing);
         if (initial || !editing) {
           setContent(data.content);
           setTimezone(data.timezone);
@@ -182,6 +189,48 @@ export function PostDetail({ postId }: { postId: string }) {
         >
           {post.connectionExpiryWarning}
         </p>
+      ) : null}
+
+      {post.status === "scheduled" && readiness ? (
+        <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-sm">
+          <p className="font-medium">Live LinkedIn approval</p>
+          <p className="mt-1 font-mono text-xs break-all">Post ID: {post.id}</p>
+          <p className="mt-2 text-muted-foreground">
+            Provider: <span className="font-mono">{readiness.publishProvider}</span>
+            {" · "}
+            Real publishing: {readiness.enableRealPublishing ? "on" : "off"}
+            {" · "}
+            Canary approved for this post:{" "}
+            {readiness.selectedPostCanaryApproved ? "yes" : "no"}
+          </p>
+          {!readiness.enableRealPublishing || readiness.publishProvider !== "linkedin" ? (
+            <p className="mt-2 text-xs text-muted-foreground">
+              To publish this post on your real LinkedIn profile, set{" "}
+              <span className="font-mono">PUBLISH_PROVIDER=linkedin</span>,{" "}
+              <span className="font-mono">ENABLE_REAL_PUBLISHING=true</span>, keep{" "}
+              <span className="font-mono">LIVE_PUBLISH_REQUIRE_CANARY=true</span>, and set{" "}
+              <span className="font-mono">LIVE_PUBLISH_CANARY_POST_IDS</span> to this UUID only.
+              Then recreate api/worker/beat. See docs/live-e2e-publishing.md.
+            </p>
+          ) : readiness.selectedPostCanaryApproved ? (
+            <p className="mt-2 text-xs text-emerald-800 dark:text-emerald-200">
+              This post is on the live canary allowlist. When it becomes due, the worker will call
+              LinkedIn&apos;s real Posts API (not the fake publisher).
+            </p>
+          ) : (
+            <p className="mt-2 text-xs text-amber-800 dark:text-amber-200">
+              Real publishing is enabled, but this UUID is not on{" "}
+              <span className="font-mono">LIVE_PUBLISH_CANARY_POST_IDS</span>. It will not be
+              sent to LinkedIn until you approve it explicitly.
+            </p>
+          )}
+          {readiness.pendingScheduledNonCanary > 0 ? (
+            <p className="mt-2 text-xs text-muted-foreground">
+              {readiness.pendingScheduledNonCanary} other scheduled post(s) remain blocked by the
+              canary gate.
+            </p>
+          ) : null}
+        </div>
       ) : null}
 
       {editing && canEdit ? (
@@ -363,8 +412,18 @@ export function PostDetail({ postId }: { postId: string }) {
 
       {post.publicationSimulated ? (
         <p className="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-          This result came from the <strong>fake LinkedIn publisher</strong>. It is not a real
-          LinkedIn post.
+          This URN is from an isolated test/simulation run. It is <strong>not</strong> a real
+          LinkedIn publication.
+        </p>
+      ) : null}
+
+      {post.status === "published" && !post.publicationSimulated ? (
+        <p className="text-sm text-muted-foreground">
+          Confirmed LinkedIn publication
+          {attempts.length > 0 && attempts[attempts.length - 1]?.providerHttpStatus
+            ? ` (HTTP ${attempts[attempts.length - 1]?.providerHttpStatus})`
+            : ""}
+          .
         </p>
       ) : null}
 
@@ -389,8 +448,16 @@ export function PostDetail({ postId }: { postId: string }) {
                     ? ` · Finished ${formatInTimezone(attempt.finishedAt, post.timezone)}`
                     : ""}
                 </p>
+                {attempt.providerHttpStatus != null ? (
+                  <p className="text-xs">HTTP {attempt.providerHttpStatus}</p>
+                ) : null}
                 {attempt.sanitizedErrorCode ? (
                   <p className="text-xs">Error: {attempt.sanitizedErrorCode}</p>
+                ) : null}
+                {attempt.errorCategory ? (
+                  <p className="text-xs text-muted-foreground">
+                    Category: {attempt.errorCategory}
+                  </p>
                 ) : null}
                 {attempt.nextRetryAt ? (
                   <p className="text-xs">

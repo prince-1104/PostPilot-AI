@@ -1,9 +1,9 @@
 # PostPilot AI
 
-A LinkedIn post scheduling application. This repository is at **Phase 4B: real LinkedIn
-text publishing** on top of the Phase 4A Celery/Redis/PostgreSQL engine. OAuth, scheduling,
-workers, leases/retries, the fake provider (still the safe default), and optional live
-`POST /rest/posts` publishing are in place. AI generation and media uploads are not.
+A LinkedIn post scheduling application. The **user-facing workflow is real LinkedIn text
+publishing** (OAuth, scheduling, Celery workers, canary-gated live Posts API). The fake
+publisher remains for automated tests and explicit simulation only; it is not a fallback
+when LinkedIn fails. AI generation and media uploads are not implemented.
 
 See [docs/implementation-status.md](docs/implementation-status.md) for exactly what is
 and is not built, [docs/publishing-engine.md](docs/publishing-engine.md) for the worker

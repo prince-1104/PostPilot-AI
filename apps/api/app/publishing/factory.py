@@ -14,6 +14,7 @@ def build_publisher(
     *,
     encryptor: TokenEncryptor | None = None,
 ) -> LinkedInPublisher:
+    """Select the publisher. Real failures never fall back to the fake provider."""
     provider = settings.publish_provider
     if provider == "fake":
         if settings.app_env == "production" and not settings.allow_fake_publisher_in_production:
@@ -30,6 +31,7 @@ def build_publisher(
             )
         if encryptor is None:
             encryptor = TokenEncryptor.from_settings_value(settings.token_encryption_key)
+        # Intentionally no try/except fallback to FakeLinkedInPublisher.
         return RealLinkedInPublisher(settings=settings, encryptor=encryptor)
 
     raise RuntimeError(f"Unknown PUBLISH_PROVIDER {provider!r}")

@@ -101,7 +101,7 @@ export function PostsList() {
   async function handleCancel(post: ScheduledPost) {
     if (
       !window.confirm(
-        "Cancel this scheduled post? It will not be published. This cannot be undone from this phase.",
+        "Cancel this scheduled post? It will not be published. This cannot be undone.",
       )
     ) {
       return;
@@ -211,7 +211,9 @@ export function PostsList() {
                   </p>
                 ) : null}
                 {post.publicationSimulated ? (
-                  <p className="text-xs text-muted-foreground">Simulated publication (Phase 4A)</p>
+                  <p className="text-xs text-muted-foreground">
+                    Not a real LinkedIn post (test/simulation URN)
+                  </p>
                 ) : null}
                 {post.connectionExpiryWarning ? (
                   <p className="text-xs text-amber-700 dark:text-amber-400">

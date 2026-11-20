@@ -1,6 +1,6 @@
 # Implementation status
 
-Last updated: 2026-11-21, at the end of Phase 4C (safe live E2E canary preparation).
+Last updated: 2026-11-21 — real LinkedIn publishing is the user-facing workflow (canary-gated).
 
 This file states what works today. Anything not listed under "Implemented" does not
 exist, even if a navigation label or environment variable hints at it.
@@ -17,7 +17,7 @@ exist, even if a navigation label or environment variable hints at it.
 | Scheduled posts CRUD | Create/list/get/patch/cancel with idempotency + optimistic concurrency. |
 | Publish attempts API | `GET /api/v1/posts/{id}/attempts` (sanitized history). |
 | Celery worker + beat | Separate Compose services; Redis broker; DB-backed dispatch/recovery. |
-| Fake LinkedIn publisher | Deterministic scenarios; never calls LinkedIn. Default provider. |
+| Fake LinkedIn publisher | Tests / isolated simulation only; never a silent fallback. |
 | Real LinkedIn publisher | `RealLinkedInPublisher` → `POST /rest/posts`; off until explicitly enabled. |
 | Live canary allowlist | `LIVE_PUBLISH_REQUIRE_CANARY` + `LIVE_PUBLISH_CANARY_POST_IDS` gate real submits. |
 | Publishing readiness API | `GET /api/v1/publishing/readiness` (no secrets; configured vs ready vs verified). |
