@@ -31,7 +31,10 @@ x-api-environment: &api-environment
   COOKIE_SECURE: ${COOKIE_SECURE:-false}
   SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-1209600}
   PUBLISH_PROVIDER: ${PUBLISH_PROVIDER:-fake}
+  ENABLE_REAL_PUBLISHING: ${ENABLE_REAL_PUBLISHING:-false}
   FAKE_PUBLISH_DEFAULT_SCENARIO: ${FAKE_PUBLISH_DEFAULT_SCENARIO:-success}
+  LINKEDIN_API_VERSION: ${LINKEDIN_API_VERSION:-202611}
+  LINKEDIN_API_BASE_URL: ${LINKEDIN_API_BASE_URL:-https://api.linkedin.com}
   CELERY_WORKER_CONCURRENCY: ${CELERY_WORKER_CONCURRENCY:-2}
   PUBLISH_DISPATCHER_INTERVAL_SECONDS: ${PUBLISH_DISPATCHER_INTERVAL_SECONDS:-15}
   PUBLISH_RECOVERY_INTERVAL_SECONDS: ${PUBLISH_RECOVERY_INTERVAL_SECONDS:-30}
@@ -165,6 +168,9 @@ services:
       - app.workers.celery_app.celery_app
       - beat
       - --loglevel=INFO
+      # Non-root image user cannot write celerybeat-schedule under /app.
+      - --schedule
+      - /tmp/celerybeat-schedule
     environment: *api-environment
     depends_on:
       postgres:

@@ -27,6 +27,7 @@ from app.core.errors import (
 from app.core.timezones import assert_offset_matches_timezone, require_iana_timezone
 from app.models import LinkedInConnection, PublishAttempt, ScheduledPost, User
 from app.models.enums import ConnectionStatus, PostStatus
+from app.publishing.person_urn import linkedin_permalink_for_post_urn
 from app.repositories.posts import PostRepository
 from app.schemas.posts import (
     CreateScheduledPost,
@@ -382,6 +383,18 @@ class PostService:
                     "LinkedIn tokens automatically."
                 )
         urn = post.linkedin_post_urn
+        simulated = bool(urn and urn.startswith("urn:li:share:fake-"))
+        reconnect = bool(
+            post.last_error_code
+            in {
+                "linkedin_unauthorized",
+                "linkedin_token_expired",
+                "connection_not_active",
+                "missing_access_token",
+                "missing_w_member_social",
+                "linkedin_forbidden",
+            }
+        )
         return ScheduledPostResponse(
             id=post.id,
             linkedin_connection_id=post.linkedin_connection_id,
@@ -398,9 +411,13 @@ class PostService:
             next_attempt_at=post.next_attempt_at,
             last_error_code=post.last_error_code,
             last_error_at=post.last_error_at,
-            publication_simulated=bool(urn and urn.startswith("urn:li:share:fake-")),
+            publication_simulated=simulated,
+            linkedin_permalink=(
+                None if simulated or not urn else linkedin_permalink_for_post_urn(urn)
+            ),
             connection_expires_before_schedule=expires_before,
             connection_expiry_warning=warning,
+            reconnect_required=reconnect,
         )
 
     async def list_attempts(

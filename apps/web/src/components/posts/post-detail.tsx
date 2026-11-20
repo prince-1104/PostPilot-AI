@@ -297,7 +297,7 @@ export function PostDetail({ postId }: { postId: string }) {
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground">Provider URN</dt>
+              <dt className="text-muted-foreground">LinkedIn post URN</dt>
               <dd className="font-mono text-xs">{post.linkedinPostUrn ?? "—"}</dd>
             </div>
             <div>
@@ -305,23 +305,66 @@ export function PostDetail({ postId }: { postId: string }) {
               <dd>{post.lastErrorCode ?? "—"}</dd>
             </div>
           </dl>
+          {post.status === "published" && post.linkedinPermalink && !post.publicationSimulated ? (
+            <p>
+              <a
+                href={post.linkedinPermalink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm font-medium underline underline-offset-4"
+              >
+                Open on LinkedIn
+              </a>
+            </p>
+          ) : null}
         </div>
       )}
+
+      {post.status === "failed" ? (
+        <div
+          className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm"
+          role="alert"
+        >
+          <p className="font-medium text-destructive">Publishing failed</p>
+          <p className="mt-1 text-destructive/90">
+            {post.lastErrorCode
+              ? `Error code: ${post.lastErrorCode}.`
+              : "No sanitized error code was recorded."}
+          </p>
+          {post.reconnectRequired ? (
+            <p className="mt-2">
+              Reconnect LinkedIn on the{" "}
+              <Link href="/connections" className="underline underline-offset-4">
+                Connections
+              </Link>{" "}
+              page, then schedule a new post. PostPilot does not refresh LinkedIn tokens.
+            </p>
+          ) : null}
+          {attempts[0] ? (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Most recent attempt #{attempts[attempts.length - 1]?.attemptNumber}:{" "}
+              {attempts[attempts.length - 1]?.sanitizedErrorCode ??
+                attempts[attempts.length - 1]?.executionState}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       {post.status === "requires_review" ? (
         <p
           className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-100"
           role="status"
         >
-          This post needs manual review. Publication may already have succeeded externally, so
-          PostPilot will not automatically resubmit it. There is no Retry Now action for this state.
+          This post needs manual review. The LinkedIn API call may already have created the post,
+          so PostPilot will not automatically resubmit it. There is no one-click retry. Check the
+          attempt history below and your LinkedIn profile before taking further action.
         </p>
       ) : null}
 
       {post.publicationSimulated ? (
         <p className="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-          This result came from the Phase 4A <strong>fake LinkedIn publisher</strong>. It is not a
-          real LinkedIn post.
+          This result came from the <strong>fake LinkedIn publisher</strong>. It is not a real
+          LinkedIn post.
         </p>
       ) : null}
 

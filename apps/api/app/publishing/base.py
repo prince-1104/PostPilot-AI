@@ -1,4 +1,4 @@
-"""Publisher protocol — Phase 4A uses a fake implementation only."""
+"""Publisher protocol — fake (default) or real LinkedIn Posts API."""
 
 from __future__ import annotations
 

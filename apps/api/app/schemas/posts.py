@@ -96,9 +96,11 @@ class ScheduledPostResponse(BaseModel):
     last_error_at: datetime | None = None
     # True when linkedin_post_urn is a Phase 4A simulation URN.
     publication_simulated: bool = False
+    linkedin_permalink: str | None = None
     # Present when the LinkedIn access token expires before scheduled_at.
     connection_expires_before_schedule: bool = False
     connection_expiry_warning: str | None = None
+    reconnect_required: bool = False
 
 
 class ScheduledPostListResponse(BaseModel):

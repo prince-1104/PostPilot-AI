@@ -153,8 +153,8 @@ export function LinkedInConnectionPanel() {
         <CardHeader>
           <CardTitle>LinkedIn account</CardTitle>
           <CardDescription>
-            Connect the LinkedIn identity PostPilot uses for sign-in and scheduling. Automatic
-            publishing to LinkedIn is not enabled yet.
+            Connect the LinkedIn identity PostPilot uses for sign-in and scheduled text publishing.
+            OAuth success alone does not mean publishing has been verified.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
@@ -228,7 +228,46 @@ export function LinkedInConnectionPanel() {
                       : "None stored"}
                   </dd>
                 </div>
+                <div>
+                  <dt className="text-muted-foreground">Person URN</dt>
+                  <dd className="font-mono text-xs">{connection.personUrn ?? "—"}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Publishing readiness</dt>
+                  <dd className="font-medium">
+                    {connection.readyToSchedule ? "Ready to schedule" : "Not ready"}
+                  </dd>
+                </div>
               </dl>
+
+              <ul className="space-y-2 text-sm">
+                <li className="flex flex-wrap items-center gap-2">
+                  <Badge variant={connection.connected ? "default" : "secondary"}>
+                    {connection.connected ? "OAuth connected" : "OAuth not connected"}
+                  </Badge>
+                  <Badge
+                    variant={connection.hasPublishingPermission ? "default" : "secondary"}
+                  >
+                    {connection.hasPublishingPermission
+                      ? "w_member_social granted"
+                      : "Publishing permission missing"}
+                  </Badge>
+                  <Badge variant={connection.tokenUnexpired ? "outline" : "secondary"}>
+                    {connection.tokenUnexpired ? "Token unexpired" : "Token expired / missing"}
+                  </Badge>
+                  <Badge variant={connection.publishingVerified ? "default" : "outline"}>
+                    {connection.publishingVerified
+                      ? "Publishing verified"
+                      : "Publishing not verified yet"}
+                  </Badge>
+                </li>
+              </ul>
+              {!connection.publishingVerified && connection.connected ? (
+                <p className="text-xs text-muted-foreground">
+                  &quot;Publishing verified&quot; appears only after PostPilot persists a real
+                  LinkedIn post URN from a successful API publish — not from OAuth alone.
+                </p>
+              ) : null}
 
               {connection.reauthorizationRequired ? (
                 <p className="text-sm text-amber-700 dark:text-amber-300">

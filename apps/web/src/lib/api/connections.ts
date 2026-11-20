@@ -10,6 +10,12 @@ export interface LinkedInConnection {
   tokenExpiresAt: string | null;
   reauthorizationRequired: boolean;
   disconnectIsLocalOnly: boolean;
+  hasPublishingPermission: boolean;
+  tokenUnexpired: boolean;
+  readyToSchedule: boolean;
+  /** True only after a real LinkedIn post URN was persisted — not merely OAuth success. */
+  publishingVerified: boolean;
+  personUrn: string | null;
 }
 
 export function parseLinkedInConnection(payload: unknown): LinkedInConnection {
@@ -26,6 +32,11 @@ export function parseLinkedInConnection(payload: unknown): LinkedInConnection {
     token_expires_at,
     reauthorization_required,
     disconnect_is_local_only,
+    has_publishing_permission,
+    token_unexpired,
+    ready_to_schedule,
+    publishing_verified,
+    person_urn,
   } = payload;
 
   if (typeof connected !== "boolean" || typeof connection_status !== "string") {
@@ -45,6 +56,11 @@ export function parseLinkedInConnection(payload: unknown): LinkedInConnection {
     reauthorizationRequired: Boolean(reauthorization_required),
     disconnectIsLocalOnly:
       typeof disconnect_is_local_only === "boolean" ? disconnect_is_local_only : true,
+    hasPublishingPermission: Boolean(has_publishing_permission),
+    tokenUnexpired: Boolean(token_unexpired),
+    readyToSchedule: Boolean(ready_to_schedule),
+    publishingVerified: Boolean(publishing_verified),
+    personUrn: typeof person_urn === "string" ? person_urn : null,
   };
 }
 

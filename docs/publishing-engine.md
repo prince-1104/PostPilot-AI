@@ -1,7 +1,11 @@
-# Publishing engine (Phase 4A)
+# Publishing engine (Phase 4A + 4B)
 
-Phase 4A runs a **reliable background publishing pipeline** against a **deterministic fake
-LinkedIn provider**. Real LinkedIn HTTP publishing is Phase 4B and is refused by this build.
+PostPilot runs a **reliable background publishing pipeline** on Celery + Redis +
+PostgreSQL. Phase 4A introduced the fake provider, leases, retries, and recovery.
+Phase 4B adds an optional **real LinkedIn Posts API** publisher behind explicit flags.
+
+See [linkedin-publishing.md](linkedin-publishing.md) for LinkedIn-specific headers,
+URN mapping, and live E2E steps.
 
 ## Architecture
 
@@ -11,10 +15,14 @@ Celery Beat ──► dispatch_due_posts ──► Redis queue ──► Celery 
      └──► recover_stale_leases              │
                                             │
 PostgreSQL ◄── leases, attempts, status ────┘
+                     │
+                     ▼
+            FakeLinkedInPublisher  (default)
+            RealLinkedInPublisher  (PUBLISH_PROVIDER=linkedin + ENABLE_REAL_PUBLISHING)
 ```
 
 - **Beat** only schedules periodic tasks. It never publishes.
-- **Worker** claims posts and runs the fake publisher.
+- **Worker** claims posts and runs the configured publisher.
 - **PostgreSQL** is the system of record. Redis is a rebuildable queue.
 
 ## Post state machine
@@ -44,7 +52,7 @@ Terminal for auto-dispatch: `published`, `failed`, `cancelled`, `requires_review
 ## Database locking
 
 - Dispatcher: `SELECT … FOR UPDATE SKIP LOCKED`, set `dispatch_lease_until`, **commit**, then enqueue post UUID only.
-- Worker claim: row lock, validate status/due/connection, `scheduled → processing`, insert `publish_attempts`, set `current_attempt_id` (fencing token) + `processing_lease_until`, **commit**, then call publisher.
+- Worker claim: row lock, validate status/due/connection ownership, `scheduled → processing`, insert `publish_attempts`, set `current_attempt_id` (fencing token) + `processing_lease_until`, **commit**, then call publisher.
 - Results apply only when `current_attempt_id` still matches the attempt fencing token.
 
 ## Retry classification
@@ -71,11 +79,18 @@ Retry schedule is stored as `next_attempt_at` in PostgreSQL (not Celery countdow
 
 ## Exactly-once limitations
 
-There is **no** LinkedIn-side idempotency key in Phase 4A. Fencing prevents stale DB writes; it does **not** guarantee exactly-once external delivery. Ambiguous outcomes stop automatic republishing.
+There is **no** LinkedIn-side idempotency key. Fencing prevents stale DB writes; it does
+**not** guarantee exactly-once external delivery. Ambiguous outcomes stop automatic
+republishing.
 
-## Fake provider
+## Providers
 
-`PUBLISH_PROVIDER=fake` (default). Content markers:
+| `PUBLISH_PROVIDER` | Flag | Behavior |
+| --- | --- | --- |
+| `fake` (default) | — | Deterministic simulation; never calls LinkedIn |
+| `linkedin` | `ENABLE_REAL_PUBLISHING=true` | `POST /rest/posts` with decrypted member token |
+
+Fake content markers (still supported):
 
 - `[[fake:success]]`
 - `[[fake:rate_limit]]`
@@ -83,29 +98,13 @@ There is **no** LinkedIn-side idempotency key in Phase 4A. Fencing prevents stal
 - `[[fake:expired]]`
 - `[[fake:pre_network]]`
 - `[[fake:ambiguous]]`
-- `[[fake:interrupt]]`
+- `[[fake:interrupted]]`
 
-Fake URNs look like `urn:li:share:fake-…`. Production refuses fake unless `ALLOW_FAKE_PUBLISHER_IN_PRODUCTION=true`.
+Fake success URNs use the `urn:li:share:fake-…` prefix and are labeled
+`publication_simulated` in the API/UI. Real publishing never stores those as genuine
+results.
 
-## Running workers
+## Observability
 
-```sh
-docker compose up -d --build --wait
-# services: worker (execute) and beat (schedule)
-```
-
-Host:
-
-```sh
-cd apps/api
-uv run --env-file ../../.env celery -A app.workers.celery_app.celery_app worker -Q publish -c 2
-uv run --env-file ../../.env celery -A app.workers.celery_app.celery_app beat
-```
-
-## Tests
-
-```sh
-cd apps/api
-uv run pytest tests/test_publishing.py
-uv run --env-file ../../.env pytest -m integration
-```
+Sanitized attempt history is exposed at `GET /api/v1/posts/{id}/attempts`.
+Tokens and Authorization headers are never logged.

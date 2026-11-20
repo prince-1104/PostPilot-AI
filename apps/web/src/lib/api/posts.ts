@@ -25,8 +25,10 @@ export interface ScheduledPost {
   lastErrorCode: string | null;
   lastErrorAt: string | null;
   publicationSimulated: boolean;
+  linkedinPermalink: string | null;
   connectionExpiresBeforeSchedule: boolean;
   connectionExpiryWarning: string | null;
+  reconnectRequired: boolean;
 }
 
 export interface PublishAttempt {
@@ -119,8 +121,10 @@ export function parseScheduledPost(payload: unknown): ScheduledPost {
     lastErrorCode: optionalString(payload.last_error_code),
     lastErrorAt: optionalString(payload.last_error_at),
     publicationSimulated: Boolean(payload.publication_simulated),
+    linkedinPermalink: optionalString(payload.linkedin_permalink),
     connectionExpiresBeforeSchedule: Boolean(payload.connection_expires_before_schedule),
     connectionExpiryWarning: optionalString(payload.connection_expiry_warning),
+    reconnectRequired: Boolean(payload.reconnect_required),
   };
 }
 

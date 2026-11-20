@@ -59,6 +59,8 @@ def configure_celery(settings: Settings | None = None) -> Celery:
         timezone="UTC",
         enable_utc=True,
         worker_hijack_root_logger=False,
+        # Writable for the non-root container user (see Compose beat --schedule).
+        beat_schedule_filename="/tmp/celerybeat-schedule",
     )
     _configured = True
     return celery_app

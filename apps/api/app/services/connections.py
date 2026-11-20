@@ -5,12 +5,15 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import not_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import LinkedInConnection, User
-from app.models.enums import ConnectionStatus
+from app.models import LinkedInConnection, ScheduledPost, User
+from app.models.enums import ConnectionStatus, PostStatus
+from app.publishing.person_urn import PersonUrnError, person_urn_from_oidc_subject
 from app.schemas.auth import LinkedInConnectionResponse, UserProfileResponse
+
+POSTING_SCOPE = "w_member_social"
 
 
 def user_to_profile(user: User) -> UserProfileResponse:
@@ -58,8 +61,19 @@ class ConnectionService:
         reauth = expired or connection.connection_status == ConnectionStatus.REAUTH_REQUIRED
         status = ConnectionStatus.REAUTH_REQUIRED.value if reauth else connection.connection_status
         scopes = [part for part in connection.granted_scopes.split() if part]
+        has_publish = POSTING_SCOPE in scopes
+        token_unexpired = not expired
+        connected = not reauth and connection.encrypted_access_token is not None
+        person_urn: str | None = None
+        try:
+            person_urn = person_urn_from_oidc_subject(connection.provider_subject)
+        except PersonUrnError:
+            person_urn = None
+
+        publishing_verified = await self._has_real_published_post(user.id)
+
         return LinkedInConnectionResponse(
-            connected=not reauth and connection.encrypted_access_token is not None,
+            connected=connected,
             connection_status=status,
             id=connection.id,
             display_name=user.display_name,
@@ -67,7 +81,27 @@ class ConnectionService:
             granted_scopes=scopes,
             token_expires_at=connection.token_expires_at,
             reauthorization_required=reauth,
+            has_publishing_permission=has_publish,
+            token_unexpired=token_unexpired,
+            ready_to_schedule=(
+                connected and has_publish and token_unexpired and person_urn is not None
+            ),
+            publishing_verified=publishing_verified,
+            person_urn=person_urn if connected else None,
         )
+
+    async def _has_real_published_post(self, user_id) -> bool:
+        result = await self._db.execute(
+            select(ScheduledPost.id)
+            .where(
+                ScheduledPost.user_id == user_id,
+                ScheduledPost.status == PostStatus.PUBLISHED.value,
+                ScheduledPost.linkedin_post_urn.is_not(None),
+                not_(ScheduledPost.linkedin_post_urn.like("urn:li:share:fake-%")),
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
 
     async def disconnect_linkedin(self, user: User) -> LinkedInConnectionResponse:
         """Invalidate locally stored LinkedIn credentials without deleting the user.
@@ -115,4 +149,9 @@ class ConnectionService:
             token_expires_at=None,
             reauthorization_required=False,
             disconnect_is_local_only=True,
+            has_publishing_permission=False,
+            token_unexpired=False,
+            ready_to_schedule=False,
+            publishing_verified=False,
+            person_urn=None,
         )

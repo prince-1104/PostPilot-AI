@@ -11,8 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from app.models import PublishAttempt, ScheduledPost
-from app.models.enums import AttemptExecutionState, PostStatus
+from app.models import LinkedInConnection, PublishAttempt, ScheduledPost
+from app.models.enums import AttemptExecutionState, ConnectionStatus, PostStatus
 from app.publishing.base import LinkedInPublisher
 from app.publishing.outcomes import (
     OutcomeKind,
@@ -101,6 +101,8 @@ class PublishExecutor:
         if outcome.kind in {OutcomeKind.RETRYABLE, OutcomeKind.PRE_NETWORK_FAILURE}:
             return await self._apply_retryable(post, attempt, outcome, clock=clock)
         if outcome.kind in {OutcomeKind.PERMANENT, OutcomeKind.CONNECTION_EXPIRED}:
+            if outcome.kind == OutcomeKind.CONNECTION_EXPIRED:
+                await self._mark_connection_reauth(claim.connection.id, clock=clock)
             return await self._apply_permanent(post, attempt, outcome, clock=clock)
         # AMBIGUOUS / INTERRUPTED after submission may have started.
         return await self._apply_ambiguous(post, attempt, outcome, clock=clock)
@@ -132,6 +134,16 @@ class PublishExecutor:
             return None, None
         return post, attempt
 
+    async def _mark_connection_reauth(self, connection_id, *, clock: datetime) -> None:
+        result = await self._db.execute(
+            select(LinkedInConnection).where(LinkedInConnection.id == connection_id)
+        )
+        connection = result.scalar_one_or_none()
+        if connection is None:
+            return
+        connection.connection_status = ConnectionStatus.REAUTH_REQUIRED.value
+        connection.updated_at = clock
+
     async def _apply_success(
         self,
         post: ScheduledPost,
@@ -140,15 +152,32 @@ class PublishExecutor:
         *,
         clock: datetime,
     ) -> str:
+        urn = outcome.provider_post_urn
+        # Never persist a simulation URN as a genuine LinkedIn publication.
+        if not outcome.simulated and urn and urn.startswith("urn:li:share:fake-"):
+            return await self._apply_ambiguous(
+                post,
+                attempt,
+                PublishOutcome(
+                    kind=OutcomeKind.AMBIGUOUS,
+                    submission_started=True,
+                    http_status=outcome.http_status,
+                    error_category="provider",
+                    sanitized_error_code="rejected_fake_urn_as_real",
+                    simulated=False,
+                ),
+                clock=clock,
+            )
+
         attempt.execution_state = AttemptExecutionState.SUCCEEDED.value
         attempt.finished_at = clock
         attempt.provider_http_status = outcome.http_status
-        attempt.provider_post_urn = outcome.provider_post_urn
+        attempt.provider_post_urn = urn
         attempt.updated_at = clock
 
         post.status = PostStatus.PUBLISHED.value
         post.published_at = clock
-        post.linkedin_post_urn = outcome.provider_post_urn
+        post.linkedin_post_urn = urn
         post.current_attempt_id = None
         post.processing_lease_until = None
         post.dispatch_lease_until = None

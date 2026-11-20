@@ -30,3 +30,10 @@ class LinkedInConnectionResponse(BaseModel):
     reauthorization_required: bool = False
     # Local disconnect does not revoke the grant at LinkedIn.
     disconnect_is_local_only: bool = True
+    # Publishing readiness (derived; not proof of a successful live publish).
+    has_publishing_permission: bool = False
+    token_unexpired: bool = False
+    ready_to_schedule: bool = False
+    # True only after a real LinkedIn post URN has been persisted for this user.
+    publishing_verified: bool = False
+    person_urn: str | None = None

@@ -102,8 +102,16 @@ class Settings(BaseSettings):
 
     # Publishing engine.
     publish_provider: PublishProvider = "fake"
+    # Must be true to construct RealLinkedInPublisher (in addition to provider=linkedin).
+    enable_real_publishing: bool = False
     allow_fake_publisher_in_production: bool = False
     fake_publish_default_scenario: str = Field(default="success", min_length=1)
+    linkedin_api_version: str = Field(default="202611", min_length=6, max_length=6)
+    linkedin_api_base_url: str = Field(default="https://api.linkedin.com")
+    linkedin_publish_connect_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
+    linkedin_publish_read_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
+    linkedin_publish_write_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
+    linkedin_publish_pool_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
     dispatch_batch_size: int = Field(default=25, ge=1, le=200)
     dispatch_lease_seconds: int = Field(default=30, ge=5, le=300)
     processing_lease_seconds: int = Field(default=120, ge=30, le=1800)
@@ -179,6 +187,18 @@ class Settings(BaseSettings):
             raise ValueError("COOKIE_SECURE must be true when APP_ENV=production")
         return self
 
+    @field_validator("linkedin_api_version")
+    @classmethod
+    def _validate_linkedin_api_version(cls, value: str) -> str:
+        if not value.isdigit() or len(value) != 6:
+            raise ValueError("LINKEDIN_API_VERSION must be YYYYMM digits (e.g. 202611)")
+        return value
+
+    @field_validator("linkedin_api_base_url")
+    @classmethod
+    def _validate_linkedin_api_base_url(cls, value: str) -> str:
+        return _assert_linkedin_api_base_url(value)
+
     @model_validator(mode="after")
     def _validate_publish_provider(self) -> Settings:
         if (
@@ -190,6 +210,13 @@ class Settings(BaseSettings):
                 "PUBLISH_PROVIDER=fake requires ALLOW_FAKE_PUBLISHER_IN_PRODUCTION=true "
                 "when APP_ENV=production"
             )
+        if self.publish_provider == "linkedin":
+            if not self.enable_real_publishing:
+                raise ValueError(
+                    "PUBLISH_PROVIDER=linkedin requires ENABLE_REAL_PUBLISHING=true"
+                )
+            if self.app_env == "production" and not self.enable_real_publishing:
+                raise ValueError("Real LinkedIn publishing must be explicitly enabled")
         if self.celery_task_time_limit_seconds <= self.celery_task_soft_time_limit_seconds:
             raise ValueError(
                 "CELERY_TASK_TIME_LIMIT_SECONDS must be greater than "
@@ -207,6 +234,22 @@ class Settings(BaseSettings):
         return (
             f"redis://:{password}@{self.redis_host}:{self.redis_port}/{self.redis_db}"
         )
+
+
+def _assert_linkedin_api_base_url(url: str) -> str:
+    """Restrict publishing to LinkedIn's approved HTTPS API host."""
+    cleaned = url.rstrip("/")
+    parts = urlsplit(cleaned)
+    if parts.scheme != "https" or parts.hostname != "api.linkedin.com":
+        raise ValueError(
+            "LINKEDIN_API_BASE_URL must be https://api.linkedin.com "
+            "(no custom publishing hosts)."
+        )
+    if parts.path not in {"", "/"}:
+        raise ValueError("LINKEDIN_API_BASE_URL must not include a path.")
+    if parts.query or parts.fragment or parts.username or parts.password:
+        raise ValueError("LINKEDIN_API_BASE_URL must be an exact API root.")
+    return "https://api.linkedin.com"
 
 
 def _validate_origin(origin: str) -> None:

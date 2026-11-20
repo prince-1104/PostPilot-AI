@@ -1,13 +1,14 @@
 # PostPilot AI
 
-A LinkedIn post scheduling application. This repository is at **Phase 4A: reliable
-background publishing with a fake LinkedIn provider**. OAuth, scheduling, Celery workers,
-DB-backed dispatch/leases/retries, and simulated publication are in place. Real LinkedIn
-HTTP publishing and AI generation are not implemented yet.
+A LinkedIn post scheduling application. This repository is at **Phase 4B: real LinkedIn
+text publishing** on top of the Phase 4A Celery/Redis/PostgreSQL engine. OAuth, scheduling,
+workers, leases/retries, the fake provider (still the safe default), and optional live
+`POST /rest/posts` publishing are in place. AI generation and media uploads are not.
 
 See [docs/implementation-status.md](docs/implementation-status.md) for exactly what is
 and is not built, [docs/publishing-engine.md](docs/publishing-engine.md) for the worker
-architecture, [docs/scheduled-posts.md](docs/scheduled-posts.md) for the scheduling API,
+architecture, [docs/linkedin-publishing.md](docs/linkedin-publishing.md) for real LinkedIn
+publishing, [docs/scheduled-posts.md](docs/scheduled-posts.md) for the scheduling API,
 [docs/linkedin-oauth.md](docs/linkedin-oauth.md) for OAuth setup, and
 [docs/decisions/0001-architecture.md](docs/decisions/0001-architecture.md) for the
 reasoning behind the stack.
@@ -23,9 +24,11 @@ flowchart LR
         api["api<br/>FastAPI<br/>:8000"]
     end
 
-    subgraph internal["Internal network, no host or internet route"]
+    subgraph internal["Internal network"]
         postgres[("postgres<br/>PostgreSQL 18<br/>system of record")]
-        redis[("redis<br/>Redis 8<br/>unused until workers exist")]
+        redis[("redis<br/>Redis 8<br/>Celery broker")]
+        worker["worker<br/>Celery execute"]
+        beat["beat<br/>dispatch + recovery"]
     end
 
     migrate["migrate<br/>alembic upgrade head<br/>runs once, then exits"]
@@ -34,7 +37,11 @@ flowchart LR
     browser -->|"JSON over /api/v1, CORS allow-list"| api
     api -->|asyncpg| postgres
     migrate --> postgres
-    api -.->|later phase| redis
+    worker --> redis
+    worker --> postgres
+    beat --> redis
+    beat --> postgres
+    worker -.->|optional real publish| linkedin[LinkedIn Posts API]
 ```
 
 - **web** (`apps/web`) is a Next.js App Router application. The browser calls the API
@@ -45,6 +52,8 @@ flowchart LR
 - **redis** is the Celery broker. Queue messages are rebuildable from PostgreSQL leases.
 - **worker** / **beat** run Celery execute and periodic dispatch/recovery tasks.
 - **migrate** applies Alembic migrations before the API starts.
+- Real LinkedIn publishing stays off until `PUBLISH_PROVIDER=linkedin` and
+  `ENABLE_REAL_PUBLISHING=true` (see [docs/linkedin-publishing.md](docs/linkedin-publishing.md)).
 
 ### Repository layout
 
@@ -64,7 +73,8 @@ apps/
       services/         Business logic (OAuth, sessions, connections, posts)
       repositories/     Persistence helpers (posts)
       integrations/     LinkedIn OAuth/OIDC client
-      workers/          Background tasks (empty until publishing)
+      workers/          Celery app + publish tasks
+      publishing/       Fake and real LinkedIn publishers
     alembic/            Async migration environment
     tests/              Unit tests, plus tests/integration
 infra/                  Optional Compose overrides
