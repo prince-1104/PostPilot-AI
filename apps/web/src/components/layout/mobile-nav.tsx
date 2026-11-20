@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Menu } from "lucide-react";
 
+import { AccountSection } from "@/components/layout/account-section";
 import { Logo } from "@/components/layout/logo";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
 import { Button } from "@/components/ui/button";
@@ -27,16 +28,17 @@ export function MobileNav() {
       >
         <Menu aria-hidden="true" />
       </SheetTrigger>
-      <SheetContent side="left" className="w-72 gap-2">
+      <SheetContent side="left" className="flex w-72 flex-col gap-2">
         <SheetHeader>
           <SheetTitle>
             <Logo />
           </SheetTitle>
           <SheetDescription className="sr-only">Main navigation</SheetDescription>
         </SheetHeader>
-        <div className="px-3">
+        <div className="flex-1 px-3">
           <SidebarNav onNavigate={() => setOpen(false)} />
         </div>
+        <AccountSection />
       </SheetContent>
     </Sheet>
   );

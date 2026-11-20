@@ -9,12 +9,27 @@ from functools import lru_cache
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 Environment = Literal["local", "test", "staging", "production"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 LogFormat = Literal["json", "console"]
+
+# Scopes PostPilot needs for sign-in and (later) publishing. Configuration that omits
+# any of these fails at startup so we never silently degrade authentication.
+REQUIRED_LINKEDIN_SCOPES: frozenset[str] = frozenset(
+    {"openid", "profile", "email", "w_member_social"}
+)
+
+LINKEDIN_AUTHORIZATION_URL = "https://www.linkedin.com/oauth/v2/authorization"
+LINKEDIN_TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken"  # noqa: S105
+LINKEDIN_USERINFO_URL = "https://api.linkedin.com/v2/userinfo"
+LINKEDIN_JWKS_URL = "https://www.linkedin.com/oauth/openid/jwks"
+# LinkedIn has used both issuer values; accept either when validating ID tokens.
+LINKEDIN_ISSUERS: frozenset[str] = frozenset(
+    {"https://www.linkedin.com", "https://www.linkedin.com/oauth"}
+)
 
 
 class Settings(BaseSettings):
@@ -45,9 +60,27 @@ class Settings(BaseSettings):
     # NoDecode stops pydantic-settings from requiring JSON for this list.
     cors_allowed_origins: Annotated[list[str], NoDecode]
 
-    @field_validator("postgres_password")
+    linkedin_client_id: str = Field(min_length=1)
+    linkedin_client_secret: SecretStr
+    linkedin_redirect_uri: str = Field(min_length=1)
+    # Space-separated OAuth scopes. Must include every entry in REQUIRED_LINKEDIN_SCOPES.
+    linkedin_scopes: str = Field(min_length=1)
+
+    # Base64-encoded 32-byte AES-256 key used to encrypt LinkedIn access tokens at rest.
+    token_encryption_key: SecretStr
+
+    # Frontend origin used for post-OAuth redirects (scheme://host[:port], no path).
+    web_base_url: str = Field(min_length=1)
+
+    # Session cookie Secure flag. False only for local HTTP; must be True in production.
+    cookie_secure: bool = False
+    session_ttl_seconds: int = Field(default=60 * 60 * 24 * 14, ge=60, le=60 * 60 * 24 * 90)
+    oauth_state_ttl_seconds: int = Field(default=600, ge=60, le=3600)
+    linkedin_http_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+
+    @field_validator("postgres_password", "linkedin_client_secret", "token_encryption_key")
     @classmethod
-    def _require_password(cls, value: SecretStr) -> SecretStr:
+    def _require_secret(cls, value: SecretStr) -> SecretStr:
         if not value.get_secret_value():
             raise ValueError("must not be empty")
         return value
@@ -65,6 +98,49 @@ class Settings(BaseSettings):
         for origin in origins:
             _validate_origin(origin)
         return list(dict.fromkeys(origins))
+
+    @field_validator("web_base_url")
+    @classmethod
+    def _validate_web_base_url(cls, value: str) -> str:
+        _validate_origin(value.rstrip("/"))
+        return value.rstrip("/")
+
+    @field_validator("linkedin_redirect_uri")
+    @classmethod
+    def _validate_redirect_uri(cls, value: str) -> str:
+        parts = urlsplit(value)
+        if parts.scheme not in {"http", "https"} or not parts.hostname or parts.fragment:
+            raise ValueError(
+                "must be an absolute http(s) URL without a fragment "
+                "(e.g. http://localhost:8000/api/v1/auth/linkedin/callback)"
+            )
+        return value
+
+    @field_validator("linkedin_scopes")
+    @classmethod
+    def _validate_scopes(cls, value: str) -> str:
+        scopes = [part for part in value.split() if part]
+        if not scopes:
+            raise ValueError("must list at least one scope")
+        missing = sorted(REQUIRED_LINKEDIN_SCOPES - set(scopes))
+        if missing:
+            raise ValueError(
+                "LINKEDIN_SCOPES is missing required scopes: "
+                f"{', '.join(missing)}. Provision them on the LinkedIn developer app "
+                "and include them in LINKEDIN_SCOPES; do not silently drop scopes."
+            )
+        # Preserve order while deduplicating.
+        return " ".join(dict.fromkeys(scopes))
+
+    @model_validator(mode="after")
+    def _validate_cookie_secure_for_production(self) -> Settings:
+        if self.app_env == "production" and not self.cookie_secure:
+            raise ValueError("COOKIE_SECURE must be true when APP_ENV=production")
+        return self
+
+    @property
+    def linkedin_scope_list(self) -> list[str]:
+        return self.linkedin_scopes.split()
 
 
 def _validate_origin(origin: str) -> None:

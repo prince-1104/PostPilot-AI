@@ -39,6 +39,33 @@ class DependencyUnavailableError(AppError):
     code = "dependency_unavailable"
 
 
+class UnauthorizedError(AppError):
+    status_code = HTTPStatus.UNAUTHORIZED
+    code = "unauthorized"
+
+
+class ForbiddenError(AppError):
+    status_code = HTTPStatus.FORBIDDEN
+    code = "forbidden"
+
+
+class ConflictError(AppError):
+    status_code = HTTPStatus.CONFLICT
+    code = "conflict"
+
+
+class OAuthError(AppError):
+    """Browser-facing OAuth failure. Routes may redirect instead of returning JSON."""
+
+    status_code = HTTPStatus.BAD_REQUEST
+    code = "oauth_error"
+
+
+class OriginRejectedError(AppError):
+    status_code = HTTPStatus.FORBIDDEN
+    code = "origin_rejected"
+
+
 def build_error_response(
     *,
     status_code: int,

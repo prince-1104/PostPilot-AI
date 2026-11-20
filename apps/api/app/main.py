@@ -15,7 +15,9 @@ from app.core.config import Settings, get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import REQUEST_ID_HEADER, RequestContextMiddleware
+from app.core.security import TokenEncryptor
 from app.db.session import create_engine, create_session_factory
+from app.integrations.linkedin import HttpLinkedInClient, LinkedInOidcValidator
 
 logger = structlog.get_logger(__name__)
 
@@ -27,14 +29,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(level=settings.log_level, log_format=settings.log_format)
 
+    # Fail fast on an unusable encryption key before accepting traffic.
+    token_encryptor = TokenEncryptor.from_settings_value(settings.token_encryption_key)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         engine = create_engine(settings)
         app.state.session_factory = create_session_factory(engine)
+        linkedin_client = HttpLinkedInClient(settings)
+        app.state.linkedin_client = linkedin_client
+        app.state.oidc_validator = LinkedInOidcValidator(client_id=settings.linkedin_client_id)
+        app.state.token_encryptor = token_encryptor
         logger.info("app.started", app_env=settings.app_env)
         try:
             yield
         finally:
+            await linkedin_client.aclose()
             await engine.dispose()
             logger.info("app.stopped")
 
@@ -48,6 +58,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None,
     )
     app.state.settings = settings
+    app.state.token_encryptor = token_encryptor
 
     # Middleware added last runs first. CORS must be outermost so that every
     # response, including error responses produced by RequestContextMiddleware,

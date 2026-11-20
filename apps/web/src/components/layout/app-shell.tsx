@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 
+import { AccountSection } from "@/components/layout/account-section";
 import { Logo } from "@/components/layout/logo";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
@@ -16,9 +17,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="flex-1 overflow-y-auto px-3 py-4">
           <SidebarNav />
         </div>
-        <p className="border-t px-5 py-4 text-xs leading-relaxed text-muted-foreground">
-          Sections marked “Planned” are not built yet.
-        </p>
+        <AccountSection />
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -28,7 +27,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Logo />
           </div>
           <Badge variant="outline" className="ml-auto text-muted-foreground">
-            Phase 1 · Foundation
+            Phase 2 · Auth
           </Badge>
         </header>
 

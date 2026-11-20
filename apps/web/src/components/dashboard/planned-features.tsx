@@ -5,7 +5,6 @@ import {
   type LucideIcon,
   Send,
   Sparkles,
-  UserRoundCheck,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -18,11 +17,6 @@ interface PlannedFeature {
 }
 
 const PLANNED_FEATURES: readonly PlannedFeature[] = [
-  {
-    title: "LinkedIn connection",
-    description: "Sign in with LinkedIn over OAuth and keep access tokens encrypted at rest.",
-    icon: UserRoundCheck,
-  },
   {
     title: "Post scheduling",
     description: "Write a post and choose the date and time it should be published.",

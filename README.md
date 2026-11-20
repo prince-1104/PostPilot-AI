@@ -1,13 +1,14 @@
 # PostPilot AI
 
-A LinkedIn post scheduling application. This repository is at **Phase 1: foundation and
-local infrastructure**. The application shell, the API, the database connection, and the
-local stack are in place. No product feature exists yet: there is no sign-in, no
-scheduling, no AI generation, and no publishing.
+A LinkedIn post scheduling application. This repository is at **Phase 2: LinkedIn OAuth
+and secure account connection**. The local stack, health endpoints, LinkedIn OAuth
+sign-in, encrypted token storage, and application sessions are in place. Scheduling,
+publishing, and AI generation are not implemented yet.
 
 See [docs/implementation-status.md](docs/implementation-status.md) for exactly what is
-and is not built, and [docs/decisions/0001-architecture.md](docs/decisions/0001-architecture.md)
-for the reasoning behind the stack.
+and is not built, [docs/linkedin-oauth.md](docs/linkedin-oauth.md) for OAuth setup, and
+[docs/decisions/0001-architecture.md](docs/decisions/0001-architecture.md) for the
+reasoning behind the stack.
 
 ## Architecture
 
@@ -40,8 +41,8 @@ flowchart LR
   Routes are thin; logic lives in `app/services`.
 - **postgres** is the single source of truth for all durable state.
 - **redis** is provisioned for the future Celery queue. No code connects to it yet.
-- **migrate** applies Alembic migrations before the API starts. There are no domain
-  tables yet, so it currently only creates Alembic's own version table.
+- **migrate** applies Alembic migrations before the API starts (users, LinkedIn
+  connections, auth sessions, and OAuth states).
 
 ### Repository layout
 
@@ -56,11 +57,11 @@ apps/
       api/v1/           HTTP routes
       core/             config, logging, errors, middleware
       db/               SQLAlchemy base and engine/session factory
-      models/           ORM models (empty in Phase 1)
+      models/           ORM models (users, sessions, LinkedIn connections)
       schemas/          Pydantic request/response models
-      services/         Business logic
-      integrations/     External service clients (empty in Phase 1)
-      workers/          Background tasks (empty in Phase 1)
+      services/         Business logic (OAuth, sessions, connections)
+      integrations/     LinkedIn OAuth/OIDC client
+      workers/          Background tasks (empty until publishing)
     alembic/            Async migration environment
     tests/              Unit tests, plus tests/integration
 infra/                  Optional Compose overrides
@@ -95,20 +96,20 @@ Run every command from the repository root.
 cp .env.example .env
 ```
 
-**2. Set the two required secrets in `.env`:** `POSTGRES_PASSWORD` and `REDIS_PASSWORD`.
-They are blank on purpose, and Compose refuses to start until both are set. Generate a
-separate value for each with one of these:
+**2. Set required secrets in `.env`.** At minimum: `POSTGRES_PASSWORD`, `REDIS_PASSWORD`,
+`TOKEN_ENCRYPTION_KEY`, and the LinkedIn OAuth values. Blank secrets refuse to start.
+See [docs/linkedin-oauth.md](docs/linkedin-oauth.md) for the LinkedIn app setup.
 
 ```sh
-# With uv
+# Hex secrets (Postgres / Redis)
 uv run --no-project python -c "import secrets; print(secrets.token_hex(24))"
 
-# With OpenSSL (macOS, Linux, Git Bash)
-openssl rand -hex 24
+# AES-256 encryption key (base64-encoded 32 bytes)
+uv run --no-project python -c "import base64,secrets; print(base64.b64encode(secrets.token_bytes(32)).decode())"
 ```
 
 ```powershell
-# With PowerShell only
+# Hex secret with PowerShell only
 $b = New-Object byte[] 24; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); -join ($b | ForEach-Object { $_.ToString('x2') })
 ```
 
@@ -125,6 +126,7 @@ docker compose up -d --build --wait
 | What | URL |
 | --- | --- |
 | Web app | <http://localhost:3000> |
+| LinkedIn connections | <http://localhost:3000/connections> |
 | API liveness | <http://localhost:8000/api/v1/health/live> |
 | API readiness (checks PostgreSQL) | <http://localhost:8000/api/v1/health/ready> |
 | Interactive API docs (disabled when `APP_ENV=production`) | <http://localhost:8000/api/v1/docs> |

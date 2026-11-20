@@ -15,9 +15,9 @@ export default function DashboardPage() {
       <header className="flex flex-col gap-2">
         <h1 className="font-heading text-2xl font-semibold tracking-tight">Dashboard</h1>
         <p className="max-w-2xl text-muted-foreground">
-          PostPilot AI is in its foundation phase. The application shell, API, database, and
-          queue infrastructure are in place. No product features are implemented yet, so
-          there is no account, post, or publishing data to show.
+          PostPilot AI can connect a LinkedIn account over OAuth. Scheduling, publishing, and
+          the AI writing assistant are not implemented yet, so there is no post or publishing
+          data to show.
         </p>
       </header>
 

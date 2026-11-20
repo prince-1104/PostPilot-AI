@@ -1,5 +1,8 @@
 """Configuration loading and validation."""
 
+import base64
+import secrets
+
 import pytest
 from pydantic import ValidationError
 
@@ -14,6 +17,12 @@ REQUIRED_ENVIRONMENT = {
     "POSTGRES_USER": "postpilot",
     "POSTGRES_PASSWORD": "value-used-only-in-this-test",
     "CORS_ALLOWED_ORIGINS": "http://localhost:3000",
+    "LINKEDIN_CLIENT_ID": "linkedin-client",
+    "LINKEDIN_CLIENT_SECRET": "linkedin-secret",
+    "LINKEDIN_REDIRECT_URI": "http://localhost:8000/api/v1/auth/linkedin/callback",
+    "LINKEDIN_SCOPES": "openid profile email w_member_social",
+    "TOKEN_ENCRYPTION_KEY": base64.b64encode(secrets.token_bytes(32)).decode(),
+    "WEB_BASE_URL": "http://localhost:3000",
 }
 
 
@@ -27,6 +36,8 @@ def test_settings_load_from_environment(monkeypatch: pytest.MonkeyPatch) -> None
         monkeypatch,
         POSTGRES_PORT="6543",
         CORS_ALLOWED_ORIGINS="http://localhost:3000, https://app.example.com",
+        COOKIE_SECURE="false",
+        SESSION_TTL_SECONDS="7200",
     )
 
     settings = Settings()
@@ -35,6 +46,10 @@ def test_settings_load_from_environment(monkeypatch: pytest.MonkeyPatch) -> None
     assert settings.postgres_host == "db.internal"
     assert settings.postgres_port == 6543
     assert settings.cors_allowed_origins == ["http://localhost:3000", "https://app.example.com"]
+    assert settings.linkedin_client_id == "linkedin-client"
+    assert settings.web_base_url == "http://localhost:3000"
+    assert settings.cookie_secure is False
+    assert settings.session_ttl_seconds == 7200
     # Operational tunables fall back to documented defaults.
     assert settings.log_level == "INFO"
     assert settings.log_format == "json"
@@ -139,3 +154,13 @@ def test_database_url_escapes_special_characters_in_credentials(
     assert url.render_as_string(hide_password=False) == (
         "postgresql+asyncpg://postpilot:p%40ss%3Aw%2Frd%231@db.internal:5432/postpilot"
     )
+
+
+def test_missing_required_linkedin_scope_is_rejected(settings_factory: SettingsFactory) -> None:
+    with pytest.raises(ValidationError, match="missing required scopes"):
+        settings_factory(linkedin_scopes="openid profile email")
+
+
+def test_production_requires_secure_cookies(settings_factory: SettingsFactory) -> None:
+    with pytest.raises(ValidationError, match="COOKIE_SECURE"):
+        settings_factory(app_env="production", cookie_secure=False)

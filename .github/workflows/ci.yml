@@ -39,6 +39,7 @@ jobs:
           --health-retries 10
 
     # Read by Alembic and the integration tests. Unit tests ignore the environment.
+    # LinkedIn values are placeholders: CI never calls LinkedIn.
     env:
       APP_ENV: test
       LOG_FORMAT: json
@@ -48,6 +49,15 @@ jobs:
       POSTGRES_USER: postpilot_ci
       POSTGRES_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
       CORS_ALLOWED_ORIGINS: http://localhost:3000
+      LINKEDIN_CLIENT_ID: ci-linkedin-client
+      LINKEDIN_CLIENT_SECRET: ci-linkedin-secret
+      LINKEDIN_REDIRECT_URI: http://localhost:8000/api/v1/auth/linkedin/callback
+      LINKEDIN_SCOPES: openid profile email w_member_social
+      # Fixed 32-byte key for CI only (base64). Not a production secret.
+      TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      WEB_BASE_URL: http://localhost:3000
+      COOKIE_SECURE: "false"
+      SESSION_TTL_SECONDS: "3600"
 
     steps:
       - uses: actions/checkout@v7

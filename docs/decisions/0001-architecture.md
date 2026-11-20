@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-11-20
-- **Scope:** Phase 1 (foundation and local infrastructure)
+- **Scope:** Phase 1 foundation; Phase 2 LinkedIn OAuth builds on these decisions
 
 ## Context
 
@@ -136,11 +136,19 @@ that supports scheduled and retried tasks at this scale.
 - The frontend calls the API across origins, so CORS has to be configured correctly, and
   any future browser session mechanism has to be designed with that in mind.
 
+## Phase 2 additions (accepted)
+
+- LinkedIn OIDC `sub` is the external identity key (not email).
+- Access tokens are encrypted at rest with AES-256-GCM in a versioned blob (`v1.<key_id>…`).
+- Browser auth uses opaque server-side sessions (hashed in PostgreSQL), not JWTs.
+- OAuth CSRF uses hashed one-time state plus an HttpOnly browser nonce cookie.
+- No refresh-token flow: LinkedIn member tokens expire and require reauthorization.
+
 ## Open questions for later phases
 
 These are not decided here:
 
-- How LinkedIn tokens are encrypted at rest and how keys are rotated.
-- How a browser session is represented after OAuth sign-in.
+- Encryption key rotation procedure in production.
+- Mapping from OIDC `sub` to the LinkedIn person URN used by publishing APIs.
 - The exact claiming and retry scheme for due posts.
 - Which language-model provider is used, and how its cost and failures are bounded.

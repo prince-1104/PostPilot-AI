@@ -72,6 +72,22 @@ function toApiError(status: number, payload: unknown): ApiError | UnexpectedResp
 
 interface RequestOptions {
   signal?: AbortSignal;
+  /** When true, send cookies (session) cross-origin. Default false for public GETs. */
+  credentials?: RequestCredentials;
+}
+
+async function parseJson(response: Response): Promise<unknown> {
+  if (response.status === 204) {
+    return null;
+  }
+  try {
+    return await response.json();
+  } catch (cause) {
+    throw new UnexpectedResponseError(
+      `The API returned HTTP ${response.status} with a body that is not valid JSON.`,
+      { cause },
+    );
+  }
 }
 
 /**
@@ -89,21 +105,55 @@ export async function apiGet<T>(
   const response = await fetch(`${env.apiBaseUrl}${path}`, {
     headers: { Accept: "application/json" },
     cache: "no-store",
+    credentials: options.credentials ?? "omit",
     signal: options.signal ?? null,
   });
 
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch (cause) {
-    throw new UnexpectedResponseError(
-      `The API returned HTTP ${response.status} with a body that is not valid JSON.`,
-      { cause },
-    );
-  }
-
+  const payload = await parseJson(response);
   if (!response.ok) {
     throw toApiError(response.status, payload);
   }
   return parse(payload);
+}
+
+export async function apiPost<T>(
+  path: string,
+  parse: (payload: unknown) => T,
+  options: RequestOptions = {},
+): Promise<T> {
+  const response = await fetch(`${env.apiBaseUrl}${path}`, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+    credentials: options.credentials ?? "include",
+    signal: options.signal ?? null,
+  });
+
+  const payload = await parseJson(response);
+  if (!response.ok) {
+    throw toApiError(response.status, payload);
+  }
+  return parse(payload);
+}
+
+export async function apiPostEmpty(
+  path: string,
+  options: RequestOptions = {},
+): Promise<void> {
+  const response = await fetch(`${env.apiBaseUrl}${path}`, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+    credentials: options.credentials ?? "include",
+    signal: options.signal ?? null,
+  });
+
+  if (response.status === 204) {
+    return;
+  }
+
+  const payload = await parseJson(response);
+  if (!response.ok) {
+    throw toApiError(response.status, payload);
+  }
 }
