@@ -1,0 +1,15 @@
+# Dependencies and build output are produced inside the image.
+node_modules/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Environment files never enter the image. NEXT_PUBLIC_API_BASE_URL is a build argument.
+.env
+.env.*
+
+Dockerfile
+.dockerignore
+README.md
+AGENTS.md

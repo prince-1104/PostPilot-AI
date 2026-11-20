@@ -1,0 +1,72 @@
+[project]
+name = "postpilot-api"
+version = "0.1.0"
+description = "PostPilot AI backend API"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "alembic>=1.20.1",
+    "asyncpg>=0.32.0",
+    "fastapi>=0.165.0",
+    "pydantic>=2.14.4",
+    "pydantic-settings>=2.16.3",
+    "sqlalchemy[asyncio]>=2.1.9",
+    "structlog>=26.1.0",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
+    "ruff>=0.17.6",
+]
+
+[tool.uv]
+# The API is an application run from this directory, not a distributable package.
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+# Integration tests need a real PostgreSQL instance, so they are opt-in:
+#   uv run --env-file ../../.env pytest -m integration
+addopts = "-ra --strict-markers --strict-config -m 'not integration'"
+markers = [
+    "integration: requires a reachable PostgreSQL configured through POSTGRES_* variables",
+]
+filterwarnings = ["error"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+src = ["."]
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "N",     # pep8-naming
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "C4",    # flake8-comprehensions
+    "SIM",   # flake8-simplify
+    "ASYNC", # flake8-async
+    "S",     # flake8-bandit
+    "PT",    # flake8-pytest-style
+    "T20",   # no stray print()
+    "RUF",   # ruff-specific rules
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert by design and use obviously fake credential strings as fixtures.
+"tests/**" = ["S101", "S105", "S106"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "tests"]
+# The local alembic/ migrations directory must not make the library look first-party.
+known-third-party = ["alembic"]

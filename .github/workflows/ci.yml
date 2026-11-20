@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: API (Ruff, pytest, migrations)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/api
+
+    # The database exists only for this job. Its password is derived from the run ID,
+    # so no credential is stored in the repository or reused between runs.
+    services:
+      postgres:
+        image: postgres:18.7-alpine
+        env:
+          POSTGRES_DB: postpilot_ci
+          POSTGRES_USER: postpilot_ci
+          POSTGRES_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username=postpilot_ci --dbname=postpilot_ci"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    # Read by Alembic and the integration tests. Unit tests ignore the environment.
+    env:
+      APP_ENV: test
+      LOG_FORMAT: json
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: postpilot_ci
+      POSTGRES_USER: postpilot_ci
+      POSTGRES_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
+      CORS_ALLOWED_ORIGINS: http://localhost:3000
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.4.0
+        with:
+          version: "0.13.9"
+          working-directory: apps/api
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+
+      - name: Install dependencies from the lockfile
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Unit tests
+        run: uv run pytest
+
+      - name: Apply migrations to PostgreSQL
+        run: uv run alembic upgrade head
+
+      - name: Integration tests against PostgreSQL
+        run: uv run pytest -m integration
+
+  web:
+    name: Web (ESLint, TypeScript, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/web
+
+    env:
+      # Required at build time; inlined into the client bundle.
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+      NEXT_TELEMETRY_DISABLED: "1"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pnpm (version pinned by packageManager)
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: apps/web/package.json
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+
+      - name: Install dependencies from the lockfile
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build

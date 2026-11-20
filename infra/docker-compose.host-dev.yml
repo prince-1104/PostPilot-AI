@@ -1,0 +1,20 @@
+# Optional override for developing the API on the host (uv run uvicorn, pytest, alembic).
+#
+# The base docker-compose.yml keeps PostgreSQL on an internal network with no published
+# port. This override additionally publishes it on localhost only:
+#
+#   docker compose -f docker-compose.yml -f infra/docker-compose.host-dev.yml up -d postgres
+#
+# Run the command from the repository root.
+
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    networks:
+      - backend
+      # An internal-only network cannot publish ports, so a routable one is added.
+      - host-access
+
+networks:
+  host-access: {}
