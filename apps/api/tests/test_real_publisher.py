@@ -260,8 +260,9 @@ def test_connection_interruption(settings_factory, encryption_key_b64) -> None:
         content="x",
         execution_context=_ctx(),
     )
-    assert outcome.kind == OutcomeKind.AMBIGUOUS
-    assert outcome.sanitized_error_code == "linkedin_publish_transport_error"
+    assert outcome.kind == OutcomeKind.PRE_NETWORK_FAILURE
+    assert outcome.submission_started is False
+    assert outcome.sanitized_error_code == "linkedin_publish_connect_error"
 
 
 def test_no_automatic_http_post_retry(settings_factory, encryption_key_b64) -> None:

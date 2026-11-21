@@ -157,7 +157,10 @@ services:
         condition: service_completed_successfully
     stop_grace_period: 30s
     networks:
+      # backend is internal-only (no internet). frontend is required so the worker
+      # can reach https://api.linkedin.com for real publishing.
       - backend
+      - frontend
 
   # Periodic dispatcher and lease recovery only. Never executes publish work itself.
   beat:

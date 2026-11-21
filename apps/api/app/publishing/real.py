@@ -180,6 +180,15 @@ class RealLinkedInPublisher:
                 sanitized_error_code="linkedin_publish_timeout",
                 simulated=False,
             )
+        except httpx.ConnectError:
+            # DNS / TCP connect never succeeded — LinkedIn did not receive a request.
+            return PublishOutcome(
+                kind=OutcomeKind.PRE_NETWORK_FAILURE,
+                submission_started=False,
+                error_category="network",
+                sanitized_error_code="linkedin_publish_connect_error",
+                simulated=False,
+            )
         except httpx.TransportError:
             return PublishOutcome(
                 kind=OutcomeKind.AMBIGUOUS,
