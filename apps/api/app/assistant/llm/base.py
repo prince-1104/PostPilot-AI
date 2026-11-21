@@ -7,6 +7,8 @@ from typing import TypeVar
 
 from pydantic import BaseModel
 
+from app.observability.usage import LLMResult
+
 T = TypeVar("T", bound=BaseModel)
 
 
@@ -27,5 +29,5 @@ class LLMProvider(ABC):
         system: str,
         user: str,
         schema: type[T],
-    ) -> T:
-        """Return a validated Pydantic model. Never returns secrets or tool calls."""
+    ) -> LLMResult[T]:
+        """Return validated data plus usage metadata. Never returns secrets."""

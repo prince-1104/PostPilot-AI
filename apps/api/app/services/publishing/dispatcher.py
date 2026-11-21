@@ -85,16 +85,16 @@ class DispatchService:
         if canary_enforced(self._settings):
             return 0
 
+        # Only clear rows tagged with authorization-gate error codes.
+        # Bare attempt_count==0 matched unrelated holds and raced with shared-DB
+        # dispatchers during integration tests against a live worker.
         result = await self._db.execute(
             update(ScheduledPost)
             .where(
                 ScheduledPost.status == PostStatus.SCHEDULED.value,
                 ScheduledPost.next_attempt_at.is_not(None),
                 ScheduledPost.next_attempt_at > clock,
-                or_(
-                    ScheduledPost.attempt_count == 0,
-                    ScheduledPost.last_error_code.in_(_GATE_ERROR_CODES),
-                ),
+                ScheduledPost.last_error_code.in_(_GATE_ERROR_CODES),
             )
             .values(next_attempt_at=None, dispatch_lease_until=None, updated_at=func.now())
         )

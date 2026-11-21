@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
-from datetime import datetime
+import time
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, Literal, TypedDict
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from langgraph.graph import END, START, StateGraph
 
@@ -28,6 +31,18 @@ from app.assistant.schemas import (
     WritingStyle,
 )
 from app.core.config import Settings
+from app.observability.otel import node_span
+from app.observability.usage import LLMUsage
+
+
+@dataclass
+class TurnTelemetry:
+    """Side-channel collector so LangGraph state merges cannot drop traces."""
+
+    usages: list[LLMUsage] = field(default_factory=list)
+    traces: list[dict[str, Any]] = field(default_factory=list)
+    trace_id: str = field(default_factory=lambda: str(uuid4()))
+    turn_id: str = field(default_factory=lambda: str(uuid4()))
 
 _SALARY_CLAIM = re.compile(
     r"(\$\s?\d|\bINR\b|\bUSD\b|\bsalary\b|\bcompensation\b|\bCTC\b|\bbenefits?\s+include\b)",
@@ -65,6 +80,7 @@ class AgentState(TypedDict, total=False):
     review_suggestions: list[str]
     unsupported_claims: list[str]
     auto_revision_count: int
+    user_regen_count: int
     llm_calls_this_turn: int
     force_path: str | None  # "writing" | "revise" | None
     current_stage: str
@@ -93,6 +109,7 @@ def empty_state(*, thread_id: UUID, user_id: UUID, timezone: str | None = None) 
         "unsupported_claims": [],
         "writing_style": "professional",
         "auto_revision_count": 0,
+        "user_regen_count": 0,
         "llm_calls_this_turn": 0,
         "current_stage": "intent",
         "response_state": "generating",
@@ -129,6 +146,7 @@ def snapshot_from_state(state: AgentState) -> GraphSnapshot:
         review_suggestions=list(state.get("review_suggestions") or []),
         unsupported_claims=list(state.get("unsupported_claims") or []),
         auto_revision_count=int(state.get("auto_revision_count") or 0),
+        user_regen_count=int(state.get("user_regen_count") or 0),
         llm_calls_this_turn=int(state.get("llm_calls_this_turn") or 0),
         current_stage=state.get("current_stage") or "intent",  # type: ignore[arg-type]
         validation_errors=list(state.get("validation_errors") or []),
@@ -170,6 +188,7 @@ def state_from_snapshot(snapshot: GraphSnapshot | dict[str, Any]) -> AgentState:
         "review_suggestions": list(data.review_suggestions),
         "unsupported_claims": list(data.unsupported_claims),
         "auto_revision_count": data.auto_revision_count,
+        "user_regen_count": data.user_regen_count,
         "llm_calls_this_turn": 0,  # reset each HTTP turn
         "current_stage": data.current_stage,
         "validation_errors": list(data.validation_errors),
@@ -206,10 +225,12 @@ async def _llm_call(
     llm: LLMProvider,
     settings: Settings,
     state: AgentState,
+    telemetry: TurnTelemetry,
     *,
     system: str,
     user: str,
     schema: type,
+    node_name: str,
 ) -> Any:
     calls = int(state.get("llm_calls_this_turn") or 0)
     if calls >= settings.ai_max_llm_calls_per_turn:
@@ -218,11 +239,96 @@ async def _llm_call(
             code="llm_budget_exceeded",
         )
     state["llm_calls_this_turn"] = calls + 1
-    return await llm.complete_structured(system=system, user=user, schema=schema)
+    started = datetime.now(UTC)
+    t0 = time.perf_counter()
+    timeout = settings.ai_node_timeout_seconds
+    try:
+        with node_span(
+            f"assistant.node.{node_name}",
+            attributes={
+                "thread_id": state.get("thread_id"),
+                "trace_id": telemetry.trace_id,
+                "schema": schema.__name__,
+            },
+        ):
+            result = await asyncio.wait_for(
+                llm.complete_structured(system=system, user=user, schema=schema),
+                timeout=timeout,
+            )
+    except TimeoutError as exc:
+        duration_ms = int((time.perf_counter() - t0) * 1000)
+        telemetry.traces.append(
+            {
+                "node_name": node_name,
+                "status": "timeout",
+                "started_at": started.isoformat(),
+                "ended_at": datetime.now(UTC).isoformat(),
+                "duration_ms": duration_ms,
+                "error_category": "llm_node_timeout",
+                "schema_name": schema.__name__,
+            }
+        )
+        raise LLMError(
+            "An AI step took too long and was stopped. Please try again.",
+            code="llm_node_timeout",
+        ) from exc
+    except LLMError as exc:
+        duration_ms = int((time.perf_counter() - t0) * 1000)
+        telemetry.traces.append(
+            {
+                "node_name": node_name,
+                "status": "error",
+                "started_at": started.isoformat(),
+                "ended_at": datetime.now(UTC).isoformat(),
+                "duration_ms": duration_ms,
+                "error_category": exc.code,
+                "schema_name": schema.__name__,
+            }
+        )
+        raise
+
+    usage = LLMUsage(
+        provider=result.usage.provider,
+        model=result.usage.model,
+        success=result.usage.success,
+        latency_ms=result.usage.latency_ms,
+        input_tokens=result.usage.input_tokens,
+        output_tokens=result.usage.output_tokens,
+        cached_input_tokens=result.usage.cached_input_tokens,
+        total_tokens=result.usage.total_tokens,
+        provider_request_id=result.usage.provider_request_id,
+        error_category=result.usage.error_category,
+        usage_known=result.usage.usage_known,
+        node_name=node_name,
+        schema_name=schema.__name__,
+    )
+    telemetry.usages.append(usage)
+    duration_ms = int((time.perf_counter() - t0) * 1000)
+    telemetry.traces.append(
+        {
+            "node_name": node_name,
+            "status": "ok",
+            "started_at": started.isoformat(),
+            "ended_at": datetime.now(UTC).isoformat(),
+            "duration_ms": duration_ms,
+            "provider": usage.provider,
+            "model": usage.model,
+            "schema_name": schema.__name__,
+            "usage_index": len(telemetry.usages) - 1,
+        }
+    )
+    return result.data
 
 
-def build_assistant_graph(llm: LLMProvider, settings: Settings, *, entry: str = "intent"):
+def build_assistant_graph(
+    llm: LLMProvider,
+    settings: Settings,
+    *,
+    entry: str = "intent",
+    telemetry: TurnTelemetry | None = None,
+):
     """Compile explicit graph: intent → requirements → write → review ⇄ revise → validate."""
+    tel = telemetry or TurnTelemetry()
 
     async def intent_node(state: AgentState) -> AgentState:
         message = state.get("last_user_message") or ""
@@ -230,9 +336,11 @@ def build_assistant_graph(llm: LLMProvider, settings: Settings, *, entry: str = 
             llm,
             settings,
             state,
+            tel,
             system=INTENT_SYSTEM,
             user=message,
             schema=IntentResult,
+            node_name="intent",
         )
         facts = dict(state.get("confirmed_facts") or {})
         facts.update(result.extracted_facts_map)
@@ -301,9 +409,11 @@ def build_assistant_graph(llm: LLMProvider, settings: Settings, *, entry: str = 
             llm,
             settings,
             state,
+            tel,
             system=REQUIREMENTS_SYSTEM,
             user=json.dumps(payload),
             schema=RequirementsResult,
+            node_name="requirements",
         )
         schedule = parse_schedule_expression(
             state.get("requested_schedule_text"),
@@ -361,9 +471,11 @@ def build_assistant_graph(llm: LLMProvider, settings: Settings, *, entry: str = 
             llm,
             settings,
             state,
+            tel,
             system=WRITING_SYSTEM,
             user=json.dumps(payload),
             schema=WritingResult,
+            node_name="writing",
         )
         # Never let model-suggested skills become confirmed facts.
         confirmed = dict(state.get("confirmed_facts") or {})
@@ -403,9 +515,11 @@ def build_assistant_graph(llm: LLMProvider, settings: Settings, *, entry: str = 
             llm,
             settings,
             state,
+            tel,
             system=REVISION_SYSTEM,
             user=json.dumps(payload),
             schema=WritingResult,
+            node_name="revise",
         )
         confirmed = dict(state.get("confirmed_facts") or {})
         updates: AgentState = {
@@ -443,14 +557,20 @@ def build_assistant_graph(llm: LLMProvider, settings: Settings, *, entry: str = 
             llm,
             settings,
             state,
+            tel,
             system=REVIEW_SYSTEM,
             user=json.dumps(payload),
             schema=ReviewResult,
+            node_name="review",
         )
         heuristic = heuristic_unsupported_claims(state)
         unsupported = list(dict.fromkeys([*result.unsupported_claims, *heuristic]))
         issues = list(dict.fromkeys([*result.issues, *heuristic]))
         passed = bool(result.passed) and not heuristic
+        # Annotate latest review trace with pass/fail + revision count.
+        if tel.traces and tel.traces[-1].get("node_name") == "review":
+            tel.traces[-1]["review_passed"] = passed
+            tel.traces[-1]["revision_count"] = int(state.get("auto_revision_count") or 0)
         return {
             "review_passed": passed,
             "review_issues": issues,
@@ -595,16 +715,17 @@ async def run_assistant_turn(
     settings: Settings,
     state: AgentState,
     entry: str = "intent",
-) -> AgentState:
+) -> tuple[AgentState, TurnTelemetry]:
     """Execute one user turn through the compiled graph and merge final state."""
     working: AgentState = dict(state)  # type: ignore[assignment]
     working["llm_calls_this_turn"] = 0
     if entry in {"writing", "revise"}:
         working["auto_revision_count"] = 0
+    telemetry = TurnTelemetry()
     try:
-        graph = build_assistant_graph(llm, settings, entry=entry)
+        graph = build_assistant_graph(llm, settings, entry=entry, telemetry=telemetry)
         result = await graph.ainvoke(working)
-        return result  # type: ignore[return-value]
+        return result, telemetry  # type: ignore[return-value]
     except LLMError as exc:
         merged = dict(working)
         # Preserve prior draft / facts on provider failure — do not wipe graph memory.
@@ -616,4 +737,4 @@ async def run_assistant_turn(
                 "validation_errors": [exc.code],
             }
         )
-        return merged  # type: ignore[return-value]
+        return merged, telemetry  # type: ignore[return-value]

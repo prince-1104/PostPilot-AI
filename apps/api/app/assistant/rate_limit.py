@@ -47,3 +47,46 @@ def get_assistant_rate_limiter(limit_per_minute: int) -> AssistantRateLimiter:
             limiter = AssistantRateLimiter(limit_per_minute=limit_per_minute)
             _limiters[limit_per_minute] = limiter
         return limiter
+
+
+class ConcurrentLimitError(AppError):
+    status_code = HTTPStatus.TOO_MANY_REQUESTS
+    code = "concurrent_limit"
+
+
+class AssistantConcurrencyLimiter:
+    """Per-user in-flight request cap (process-local)."""
+
+    def __init__(self, *, max_concurrent: int) -> None:
+        self._max = max_concurrent
+        self._inflight: dict[UUID, int] = defaultdict(int)
+        self._lock = Lock()
+
+    def acquire(self, user_id: UUID) -> None:
+        with self._lock:
+            if self._inflight[user_id] >= self._max:
+                raise ConcurrentLimitError(
+                    "Another assistant request is already in progress. Please wait."
+                )
+            self._inflight[user_id] += 1
+
+    def release(self, user_id: UUID) -> None:
+        with self._lock:
+            current = self._inflight.get(user_id, 0)
+            if current <= 1:
+                self._inflight.pop(user_id, None)
+            else:
+                self._inflight[user_id] = current - 1
+
+
+_concurrency: dict[int, AssistantConcurrencyLimiter] = {}
+_concurrency_lock = Lock()
+
+
+def get_assistant_concurrency_limiter(max_concurrent: int) -> AssistantConcurrencyLimiter:
+    with _concurrency_lock:
+        limiter = _concurrency.get(max_concurrent)
+        if limiter is None:
+            limiter = AssistantConcurrencyLimiter(max_concurrent=max_concurrent)
+            _concurrency[max_concurrent] = limiter
+        return limiter

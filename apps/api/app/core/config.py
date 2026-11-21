@@ -138,6 +138,14 @@ class Settings(BaseSettings):
     ai_rate_limit_per_minute: int = Field(default=20, ge=1, le=600)
     ai_max_llm_calls_per_turn: int = Field(default=8, ge=2, le=20)
     ai_llm_max_retries: int = Field(default=1, ge=0, le=3)
+    # Phase 5D observability + guardrails (reuse rate limit; no duplicate budgets).
+    ai_node_timeout_seconds: float = Field(default=45.0, gt=1, le=180)
+    ai_max_output_tokens: int | None = Field(default=2048, ge=64, le=16_000)
+    ai_max_user_regenerations_per_draft: int = Field(default=8, ge=1, le=50)
+    ai_max_concurrent_requests_per_user: int = Field(default=2, ge=1, le=10)
+    # Comma-separated user UUIDs and/or emails allowed to view cross-user AI analytics.
+    admin_user_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    admin_emails: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     @field_validator(
         "postgres_password",
@@ -236,6 +244,27 @@ class Settings(BaseSettings):
     @classmethod
     def _dedupe_canary_post_ids(cls, value: list[UUID]) -> list[UUID]:
         return list(dict.fromkeys(value))
+
+    @field_validator("admin_user_ids", "admin_emails", mode="before")
+    @classmethod
+    def _parse_admin_allowlists(cls, value: object) -> object:
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            return [part.strip() for part in value.replace(";", ",").split(",") if part.strip()]
+        return value
+
+    @field_validator("admin_user_ids", "admin_emails")
+    @classmethod
+    def _normalize_admin_allowlists(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip().lower() for item in value if item.strip()))
+
+    @field_validator("ai_max_output_tokens", mode="before")
+    @classmethod
+    def _empty_max_tokens_to_none(cls, value: object) -> object:
+        if value is None or value == "":
+            return None
+        return value
 
     @model_validator(mode="after")
     def _validate_publish_provider(self) -> Settings:

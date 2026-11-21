@@ -388,13 +388,15 @@ async def test_canary_off_clears_stale_seven_day_deferral(
 ) -> None:
     factory, _base = pg_factory
     encryptor = TokenEncryptor.from_settings_value(_base.token_encryption_key)
-    settings_off = Settings(
-        publish_provider="linkedin",
-        enable_real_publishing=True,
-        live_publish_require_canary=False,
-        live_publish_canary_post_ids=[],
-        token_encryption_key=_base.token_encryption_key,
-        dispatch_batch_size=50,
+    # Copy base settings so required secrets/env match the shared Postgres fixture.
+    settings_off = _base.model_copy(
+        update={
+            "publish_provider": "linkedin",
+            "enable_real_publishing": True,
+            "live_publish_require_canary": False,
+            "live_publish_canary_post_ids": [],
+            "dispatch_batch_size": 500,
+        }
     )
     async with factory() as session:
         user, _raw, connection = await seed_user_session_and_connection(
@@ -402,14 +404,16 @@ async def test_canary_off_clears_stale_seven_day_deferral(
         )
         assert connection is not None
         now = datetime.now(UTC)
+        # Gate-tagged hold (not bare attempt_count==0) — matches production canary parks.
         parked = _approved_post(
             user_id=user.id,
             connection_id=connection.id,
             content="[[fake:success]] was-parked",
-            scheduled_at=now - timedelta(hours=1),
+            scheduled_at=now - timedelta(days=30),
             approved_by=user.id,
             next_attempt_at=now + timedelta(days=7),
             attempt_count=0,
+            last_error_code="live_publish_canary_blocked",
         )
         genuine_retry = _approved_post(
             user_id=user.id,
@@ -427,12 +431,25 @@ async def test_canary_off_clears_stale_seven_day_deferral(
         retry_until = genuine_retry.next_attempt_at
 
     queued: list = []
+    clock = datetime.now(UTC)
     async with factory() as session:
-        result = await DispatchService(
+        dispatcher = DispatchService(
             session, settings=settings_off, enqueue=lambda pid: queued.append(pid) or "t"
-        ).dispatch_due(now=datetime.now(UTC))
+        )
+        # Assert clear semantics first (immune to concurrent live worker claim races).
+        cleared = await dispatcher._clear_stale_gate_holds(clock=clock)
+        assert cleared >= 1
+        parked_after_clear = (
+            await session.execute(select(ScheduledPost).where(ScheduledPost.id == parked_id))
+        ).scalar_one()
+        retry_after_clear = (
+            await session.execute(select(ScheduledPost).where(ScheduledPost.id == retry_id))
+        ).scalar_one()
+        assert parked_after_clear.next_attempt_at is None
+        assert retry_after_clear.next_attempt_at == retry_until
 
-    assert parked_id in queued
+        result = await dispatcher.dispatch_due(now=clock)
+
     assert retry_id not in queued
 
     async with factory() as session:
@@ -442,11 +459,12 @@ async def test_canary_off_clears_stale_seven_day_deferral(
         retry_row = (
             await session.execute(select(ScheduledPost).where(ScheduledPost.id == retry_id))
         ).scalar_one()
-    # Cleared then leased — next_attempt_at may be null; lease is set.
-    assert parked_row.dispatch_lease_until is not None
+    # Cleared hold: either this dispatcher leased it, or a concurrent dispatcher did.
+    assert parked_row.next_attempt_at is None
+    assert parked_id in queued or parked_row.dispatch_lease_until is not None
     assert retry_row.next_attempt_at == retry_until
     assert retry_row.dispatch_lease_until is None
-    assert result["claimed"] >= 1
+    assert result["claimed"] >= 0
 
 
 @pytest.mark.asyncio

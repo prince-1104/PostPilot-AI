@@ -15,6 +15,7 @@ from app.assistant.schemas import (
     ReviewResult,
     WritingResult,
 )
+from app.observability.usage import LLMResult, LLMUsage
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -31,6 +32,18 @@ _REFINE = re.compile(
 )
 
 
+def _fake_usage(*, schema: type[BaseModel], success: bool = True) -> LLMUsage:
+    """Fake provider does not report real tokens — mark usage unknown."""
+    return LLMUsage(
+        provider="fake",
+        model="fake-model",
+        success=success,
+        latency_ms=0.0,
+        usage_known=False,
+        schema_name=schema.__name__,
+    )
+
+
 class FakeLLMProvider(LLMProvider):
     """Rule-based structured responses — no network calls."""
 
@@ -40,23 +53,28 @@ class FakeLLMProvider(LLMProvider):
         system: str,
         user: str,
         schema: type[T],
-    ) -> T:
+    ) -> LLMResult[T]:
         override = _extract_override(user)
         if override is not None:
             try:
-                return schema.model_validate(override)
+                return LLMResult(
+                    data=schema.model_validate(override),
+                    usage=_fake_usage(schema=schema),
+                )
             except ValidationError as exc:
                 raise LLMError("Malformed fake LLM override.", code="llm_invalid_output") from exc
 
         if schema is IntentResult:
-            return schema.model_validate(_fake_intent(user))  # type: ignore[return-value]
-        if schema is RequirementsResult:
-            return schema.model_validate(_fake_requirements(user))  # type: ignore[return-value]
-        if schema is WritingResult:
-            return schema.model_validate(_fake_writing(system, user))  # type: ignore[return-value]
-        if schema is ReviewResult:
-            return schema.model_validate(_fake_review(user))  # type: ignore[return-value]
-        raise LLMError(f"Unsupported schema for fake LLM: {schema.__name__}")
+            data = schema.model_validate(_fake_intent(user))
+        elif schema is RequirementsResult:
+            data = schema.model_validate(_fake_requirements(user))
+        elif schema is WritingResult:
+            data = schema.model_validate(_fake_writing(system, user))
+        elif schema is ReviewResult:
+            data = schema.model_validate(_fake_review(user))
+        else:
+            raise LLMError(f"Unsupported schema for fake LLM: {schema.__name__}")
+        return LLMResult(data=data, usage=_fake_usage(schema=schema))  # type: ignore[arg-type]
 
 
 def _extract_override(user: str) -> dict | None:

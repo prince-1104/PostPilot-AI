@@ -11,13 +11,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.assistant.graph import (
+    TurnTelemetry,
     empty_state,
     run_assistant_turn,
     snapshot_from_state,
     state_from_snapshot,
 )
 from app.assistant.llm.factory import build_llm_provider
-from app.assistant.rate_limit import get_assistant_rate_limiter
+from app.assistant.rate_limit import (
+    get_assistant_concurrency_limiter,
+    get_assistant_rate_limiter,
+)
 from app.assistant.schemas import GraphSnapshot
 from app.core.config import Settings
 from app.core.errors import NotFoundError, UnprocessableError, VersionConflictError
@@ -28,6 +32,7 @@ from app.models.enums import (
     AgentThreadStatus,
     AssistantResponseState,
 )
+from app.observability.recorder import ObservabilityRecorder
 from app.schemas.assistant import (
     AssistantDraftAction,
     AssistantDraftResponse,
@@ -153,7 +158,24 @@ class AssistantService:
             )
 
         get_assistant_rate_limiter(self._settings.ai_rate_limit_per_minute).check(user.id)
+        concurrency = get_assistant_concurrency_limiter(
+            self._settings.ai_max_concurrent_requests_per_user
+        )
+        concurrency.acquire(user.id)
+        try:
+            return await self._post_message_locked(
+                user=user, thread_id=thread_id, payload=payload
+            )
+        finally:
+            concurrency.release(user.id)
 
+    async def _post_message_locked(
+        self,
+        *,
+        user: User,
+        thread_id: UUID,
+        payload: PostAssistantMessage,
+    ) -> AssistantTurnResponse:
         thread = await self._lock_thread(user_id=user.id, thread_id=thread_id)
 
         if payload.client_message_id is not None:
@@ -213,7 +235,7 @@ class AssistantService:
 
         llm = build_llm_provider(self._settings)
         try:
-            final_state = await run_assistant_turn(
+            final_state, telemetry = await run_assistant_turn(
                 llm=llm, settings=self._settings, state=base_state
             )
         except Exception:
@@ -249,7 +271,10 @@ class AssistantService:
             )
 
         return await self._finalize_turn(
-            thread=thread, final_state=final_state, title_seed=payload.content
+            thread=thread,
+            final_state=final_state,
+            title_seed=payload.content,
+            telemetry=telemetry,
         )
 
     async def apply_draft_action(
@@ -260,6 +285,24 @@ class AssistantService:
         payload: AssistantDraftAction,
     ) -> AssistantTurnResponse:
         get_assistant_rate_limiter(self._settings.ai_rate_limit_per_minute).check(user.id)
+        concurrency = get_assistant_concurrency_limiter(
+            self._settings.ai_max_concurrent_requests_per_user
+        )
+        concurrency.acquire(user.id)
+        try:
+            return await self._apply_draft_action_locked(
+                user=user, thread_id=thread_id, payload=payload
+            )
+        finally:
+            concurrency.release(user.id)
+
+    async def _apply_draft_action_locked(
+        self,
+        *,
+        user: User,
+        thread_id: UUID,
+        payload: AssistantDraftAction,
+    ) -> AssistantTurnResponse:
         thread = await self._lock_thread(user_id=user.id, thread_id=thread_id)
 
         if payload.client_message_id is not None:
@@ -284,6 +327,15 @@ class AssistantService:
             raise VersionConflictError(
                 "Draft was updated elsewhere. Refresh and try again."
             )
+
+        graph = dict(thread.graph_state or {})
+        regen = int(graph.get("user_regen_count") or 0)
+        if regen >= self._settings.ai_max_user_regenerations_per_draft:
+            raise UnprocessableError(
+                "This draft has reached the regeneration limit. Start a new thread to continue."
+            )
+        graph["user_regen_count"] = regen + 1
+        thread.graph_state = graph
 
         instruction = payload.instruction
         if payload.action == "regenerate":
@@ -337,10 +389,15 @@ class AssistantService:
             pass
 
         llm = build_llm_provider(self._settings)
-        final_state = await run_assistant_turn(
+        final_state, telemetry = await run_assistant_turn(
             llm=llm, settings=self._settings, state=base_state, entry=entry
         )
-        return await self._finalize_turn(thread=thread, final_state=final_state, title_seed=None)
+        return await self._finalize_turn(
+            thread=thread,
+            final_state=final_state,
+            title_seed=None,
+            telemetry=telemetry,
+        )
 
     async def patch_draft(
         self,
@@ -407,6 +464,7 @@ class AssistantService:
         thread: AgentThread,
         final_state: dict,
         title_seed: str | None,
+        telemetry: TurnTelemetry | None = None,
     ) -> AssistantTurnResponse:
         reply_text = final_state.get("assistant_reply") or "I could not complete that turn."
         assistant_msg = AgentMessage(
@@ -432,12 +490,20 @@ class AssistantService:
         await self._db.commit()
         await self._db.refresh(assistant_msg)
 
+        # Observability is best-effort and must never roll back a valid draft.
+        if telemetry is not None:
+            await self._persist_telemetry(
+                thread=thread, telemetry=telemetry, final_state=final_state
+            )
+
         logger.info(
             "assistant.turn_complete",
             thread_id=str(thread.id),
             user_id=str(thread.user_id),
             state=final_state.get("response_state"),
             stage=final_state.get("current_stage"),
+            llm_calls=int(final_state.get("llm_calls_this_turn") or 0),
+            usage_events=len(telemetry.usages) if telemetry else 0,
         )
 
         return AssistantTurnResponse(
@@ -455,6 +521,70 @@ class AssistantService:
             validation_errors=list(snapshot.validation_errors),
             lock_version=thread.lock_version,
         )
+
+    async def _persist_telemetry(
+        self,
+        *,
+        thread: AgentThread,
+        telemetry: TurnTelemetry,
+        final_state: dict,
+    ) -> None:
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        maker = async_sessionmaker(bind=self._db.bind, expire_on_commit=False)
+        recorder = ObservabilityRecorder(maker)
+        try:
+            trace_id = UUID(telemetry.trace_id)
+            turn_id = UUID(telemetry.turn_id)
+        except ValueError:
+            return
+
+        usage_ids: list = []
+        for idx, usage in enumerate(telemetry.usages):
+            event_id = await recorder.record_llm_usage(
+                usage=usage,
+                user_id=thread.user_id,
+                thread_id=thread.id,
+                trace_id=trace_id,
+                turn_id=turn_id,
+                idempotency_key=f"{telemetry.turn_id}:usage:{idx}:{usage.node_name}",
+            )
+            usage_ids.append(event_id)
+
+        for idx, trace in enumerate(telemetry.traces):
+            usage_index = trace.get("usage_index")
+            usage_event_id = None
+            if isinstance(usage_index, int) and 0 <= usage_index < len(usage_ids):
+                usage_event_id = usage_ids[usage_index]
+            started_raw = trace.get("started_at")
+            ended_raw = trace.get("ended_at")
+            try:
+                started_at = datetime.fromisoformat(str(started_raw))
+                ended_at = datetime.fromisoformat(str(ended_raw))
+            except (TypeError, ValueError):
+                continue
+            await recorder.record_node_trace(
+                user_id=thread.user_id,
+                thread_id=thread.id,
+                trace_id=trace_id,
+                turn_id=turn_id,
+                node_name=str(trace.get("node_name") or "unknown"),
+                status=str(trace.get("status") or "ok"),
+                started_at=started_at,
+                ended_at=ended_at,
+                duration_ms=int(trace.get("duration_ms") or 0),
+                idempotency_key=f"{telemetry.turn_id}:trace:{idx}:{trace.get('node_name')}",
+                provider=trace.get("provider"),
+                model=trace.get("model"),
+                usage_event_id=usage_event_id,
+                error_category=trace.get("error_category"),
+                review_passed=trace.get("review_passed"),
+                revision_count=trace.get("revision_count"),
+                meta={
+                    "schema_name": trace.get("schema_name"),
+                    "response_state": final_state.get("response_state"),
+                },
+            )
 
     async def _persist_unavailable_turn(
         self,

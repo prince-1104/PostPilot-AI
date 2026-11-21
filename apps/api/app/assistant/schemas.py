@@ -275,6 +275,7 @@ class GraphSnapshot(BaseModel):
     review_suggestions: list[str] = Field(default_factory=list)
     unsupported_claims: list[str] = Field(default_factory=list)
     auto_revision_count: int = 0
+    user_regen_count: int = 0
     llm_calls_this_turn: int = 0
     current_stage: AssistantStage = "intent"
     validation_errors: list[str] = Field(default_factory=list)

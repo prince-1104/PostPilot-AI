@@ -196,7 +196,7 @@ async def test_graph_does_not_create_publish_side_effects(
     state["last_user_message"] = (
         "Hiring Backend Engineer. Company is Acme. Remote. 4 years experience."
     )
-    result = await run_assistant_turn(llm=llm, settings=settings, state=state)
+    result, _tel = await run_assistant_turn(llm=llm, settings=settings, state=state)
     assert result["response_state"] == "draft_ready"
     reply = (result.get("assistant_reply") or "").lower()
     assert "has been published" not in reply

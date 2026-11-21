@@ -20,5 +20,5 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { label: "Connections", icon: UserRoundCheck, href: "/connections" },
   { label: "Posts", icon: CalendarClock, href: "/posts" },
   { label: "AI assistant", icon: Sparkles },
-  { label: "Monitoring", icon: Activity },
+  { label: "AI analytics", icon: Activity, href: "/admin/ai-analytics" },
 ];

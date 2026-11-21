@@ -17,6 +17,7 @@ from app.models.enums import (
 )
 from app.models.linkedin_connection import LinkedInConnection
 from app.models.oauth_state import OAuthState
+from app.models.observability import AgentNodeTrace, LLMUsageEvent, ModelPricingVersion
 from app.models.publish_attempt import PublishAttempt
 from app.models.scheduled_post import ScheduledPost
 from app.models.user import User
@@ -28,13 +29,16 @@ __all__ = [
     "AgentDraftStatus",
     "AgentMessage",
     "AgentMessageRole",
+    "AgentNodeTrace",
     "AgentThread",
     "AgentThreadStatus",
     "AssistantResponseState",
     "AttemptExecutionState",
     "AuthSession",
     "ConnectionStatus",
+    "LLMUsageEvent",
     "LinkedInConnection",
+    "ModelPricingVersion",
     "OAuthState",
     "PostStatus",
     "PublishAttempt",
