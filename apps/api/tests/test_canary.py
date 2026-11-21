@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from app.models import PublishAttempt, ScheduledPost
 from app.models.enums import PostStatus
+from app.publishing.authorization import apply_publish_approval
 from app.publishing.canary import canary_enforced, is_post_canary_approved
 from app.publishing.fake import FakeLinkedInPublisher
 from app.publishing.real import RealLinkedInPublisher
@@ -21,7 +22,11 @@ from tests.conftest import seed_user_session_and_connection, session_cookie_head
 
 
 async def _seed_due(
-    db_session, token_encryptor, *, content: str = "canary-body"
+    db_session,
+    token_encryptor,
+    *,
+    content: str = "canary-body",
+    publish_approved: bool = True,
 ) -> tuple[object, ScheduledPost]:
     user, _raw, connection = await seed_user_session_and_connection(
         db_session, encryptor=token_encryptor, subject=f"canary-{uuid4()}"
@@ -43,6 +48,8 @@ async def _seed_due(
         created_at=now,
         updated_at=now,
     )
+    if publish_approved:
+        apply_publish_approval(post, approved_by=user.id, clock=now)
     db_session.add(post)
     await db_session.commit()
     await db_session.refresh(post)
@@ -81,7 +88,7 @@ async def test_unapproved_post_never_calls_real_publisher(
         live_publish_require_canary=True,
         live_publish_canary_post_ids=[],
     )
-    _user, post = await _seed_due(db_session, token_encryptor)
+    _user, post = await _seed_due(db_session, token_encryptor, publish_approved=True)
     calls = 0
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -174,8 +181,12 @@ async def test_dispatcher_skips_non_canary_when_linkedin(
 async def test_old_scheduled_posts_remain_blocked(
     db_session, settings_factory, token_encryptor
 ) -> None:
-    _user, old = await _seed_due(db_session, token_encryptor, content="old")
-    _user2, approved = await _seed_due(db_session, token_encryptor, content="new")
+    _user, old = await _seed_due(
+        db_session, token_encryptor, content="old", publish_approved=False
+    )
+    _user2, approved = await _seed_due(
+        db_session, token_encryptor, content="new", publish_approved=True
+    )
     settings = settings_factory(
         publish_provider="linkedin",
         enable_real_publishing=True,

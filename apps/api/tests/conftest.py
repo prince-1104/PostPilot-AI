@@ -314,3 +314,14 @@ async def seed_user_session_and_connection(
 
 def session_cookie_header(raw_token: str) -> dict[str, str]:
     return {"Cookie": f"{SESSION_COOKIE}={raw_token}"}
+
+
+def stamp_publish_approval(post: ScheduledPost, *, approved_by, clock: datetime | None = None) -> None:
+    """Mark a seeded post as user-approved for LinkedIn publishing tests."""
+    from app.publishing.authorization import apply_publish_approval
+
+    apply_publish_approval(
+        post,
+        approved_by=approved_by,
+        clock=clock or datetime.now(UTC),
+    )

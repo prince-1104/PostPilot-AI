@@ -27,7 +27,10 @@ PgEnv = tuple[httpx.AsyncClient, async_sessionmaker[AsyncSession], Settings]
 
 @pytest.fixture
 async def pg_env() -> AsyncIterator[PgEnv]:
-    settings = Settings()
+    settings = Settings(
+        publish_provider="fake",
+        enable_real_publishing=False,
+    )
     app = create_app(settings)
     engine = create_engine(settings)
     factory = create_session_factory(engine)
@@ -59,6 +62,7 @@ async def test_concurrent_duplicate_idempotency_keys(
         "content": "Concurrent create",
         "scheduled_at": when.isoformat(),
         "timezone": "UTC",
+        "confirm_publish": True,
         "linkedin_connection_id": str(connection.id),
     }
     headers = {

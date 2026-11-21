@@ -98,7 +98,25 @@ class ScheduledPost(Base):
     last_error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
     last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    user: Mapped[User] = relationship(back_populates="scheduled_posts")  # noqa: F821
+    # Durable per-post publishing approval (NULL = unapproved; never auto-set by migration).
+    publish_approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    publish_approved_by: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    approved_content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approved_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    approval_revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    user: Mapped[User] = relationship(  # noqa: F821
+        back_populates="scheduled_posts",
+        foreign_keys=[user_id],
+    )
     linkedin_connection: Mapped[LinkedInConnection] = relationship(  # noqa: F821
         lazy="selectin",
     )

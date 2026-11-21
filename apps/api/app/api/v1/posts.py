@@ -9,6 +9,7 @@ from fastapi import APIRouter, Header, Query
 from app.api.deps import CurrentUserDep, RequireOriginDep, SessionDep, SettingsDep
 from app.core.errors import UnprocessableError
 from app.schemas.posts import (
+    ApproveScheduledPost,
     CancelScheduledPost,
     CreateScheduledPost,
     PublishAttemptListResponse,
@@ -99,6 +100,22 @@ async def cancel_post(
         user=user,
         post_id=post_id,
         expected_version=body.expected_version,
+    )
+
+
+@router.post("/{post_id}/approve", response_model=ScheduledPostResponse)
+async def approve_post(
+    post_id: UUID,
+    body: ApproveScheduledPost,
+    user: CurrentUserDep,
+    session: SessionDep,
+    settings: SettingsDep,
+    _: RequireOriginDep,
+) -> ScheduledPostResponse:
+    return await PostService(session, settings=settings).approve(
+        user=user,
+        post_id=post_id,
+        payload=body,
     )
 
 

@@ -39,5 +39,6 @@ class User(Base):
     )
     scheduled_posts: Mapped[list[ScheduledPost]] = relationship(  # noqa: F821
         back_populates="user",
+        foreign_keys="ScheduledPost.user_id",
         lazy="selectin",
     )

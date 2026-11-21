@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.models import ScheduledPost
 from app.models.enums import PostStatus
+from app.publishing.authorization import db_approval_required
 from app.publishing.canary import canary_enforced
 from app.services.publishing.metrics import METRICS
 
@@ -87,6 +88,13 @@ class DispatchService:
                 ScheduledPost.dispatch_lease_until <= clock,
             ),
         ]
+
+        # Real LinkedIn: only lease posts with durable DB approval (hash rechecked later).
+        if db_approval_required(self._settings):
+            filters.append(ScheduledPost.publish_approved_at.is_not(None))
+            filters.append(ScheduledPost.approval_revoked_at.is_(None))
+            filters.append(ScheduledPost.publish_approved_by.is_not(None))
+            filters.append(ScheduledPost.approved_content_hash.is_not(None))
 
         # Phase 4C: with real LinkedIn + canary required, never lease unrelated posts.
         if canary_enforced(self._settings):

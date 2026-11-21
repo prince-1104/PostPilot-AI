@@ -18,6 +18,7 @@ export interface PublishingReadiness {
   personUrn: string | null;
   selectedPostId: string | null;
   selectedPostCanaryApproved: boolean | null;
+  selectedPostDbApproved: boolean | null;
   selectedPostStatus: string | null;
   pendingScheduledPosts: number;
   pendingScheduledNonCanary: number;
@@ -63,6 +64,10 @@ export function parsePublishingReadiness(payload: unknown): PublishingReadiness 
     selectedPostCanaryApproved:
       typeof payload.selected_post_canary_approved === "boolean"
         ? payload.selected_post_canary_approved
+        : null,
+    selectedPostDbApproved:
+      typeof payload.selected_post_db_approved === "boolean"
+        ? payload.selected_post_db_approved
         : null,
     selectedPostStatus: optionalString(payload.selected_post_status),
     pendingScheduledPosts:

@@ -27,9 +27,15 @@ from app.core.errors import (
 from app.core.timezones import assert_offset_matches_timezone, require_iana_timezone
 from app.models import LinkedInConnection, PublishAttempt, ScheduledPost, User
 from app.models.enums import ConnectionStatus, PostStatus
+from app.publishing.authorization import (
+    apply_publish_approval,
+    is_db_publish_approved,
+    revoke_publish_approval,
+)
 from app.publishing.person_urn import linkedin_permalink_for_post_urn
 from app.repositories.posts import PostRepository
 from app.schemas.posts import (
+    ApproveScheduledPost,
     CreateScheduledPost,
     PublishAttemptListResponse,
     PublishAttemptResponse,
@@ -100,6 +106,8 @@ class PostService:
             updated_at=clock,
             published_at=None,
         )
+        # Approving user always comes from the authenticated session — never the client.
+        apply_publish_approval(post, approved_by=user.id, clock=clock)
 
         dialect = self._db.get_bind().dialect.name
         if dialect == "postgresql":
@@ -220,7 +228,9 @@ class PostService:
         if payload.content is not None:
             self._validate_content(new_content)
         require_iana_timezone(new_timezone)
-        assert_offset_matches_timezone(new_scheduled, new_timezone)
+        if payload.scheduled_at is not None or payload.timezone is not None:
+            # Re-validate wall-clock consistency only when schedule fields change.
+            assert_offset_matches_timezone(new_scheduled, new_timezone)
         if payload.scheduled_at is not None:
             self._validate_schedule_lead(new_scheduled, clock=clock)
 
@@ -229,6 +239,18 @@ class PostService:
             connection_id=post.linkedin_connection_id,
         )
 
+        material_change = (
+            new_content != post.content
+            or new_scheduled.astimezone(UTC) != post.scheduled_at.astimezone(UTC)
+            or new_timezone != post.timezone
+        )
+        if material_change and payload.confirm_publish is not True:
+            raise UnprocessableError(
+                "Editing content, destination time, or timezone requires confirm_publish=true "
+                "to renew LinkedIn publishing approval."
+            )
+
+        # Apply field updates first; version bumps inside update_if_version.
         updated = await self._repo.update_if_version(
             post=post,
             expected_version=payload.expected_version,
@@ -246,9 +268,53 @@ class PostService:
                 "The post was modified by another request. Refresh and try again."
             )
 
+        if material_change:
+            apply_publish_approval(updated, approved_by=user.id, clock=clock)
         await self._db.commit()
         await self._db.refresh(updated)
         logger.info("posts.updated", post_id=str(updated.id), user_id=str(user.id))
+        return self._to_response(updated, connection=connection, clock=clock)
+
+    async def approve(
+        self,
+        *,
+        user: User,
+        post_id: UUID,
+        payload: ApproveScheduledPost,
+        now: datetime | None = None,
+    ) -> ScheduledPostResponse:
+        """Approve an existing scheduled post owned by the session user."""
+        clock = now or datetime.now(UTC)
+        post = await self._repo.get_by_id_for_user(post_id=post_id, user_id=user.id)
+        if post is None:
+            raise NotFoundError("Post not found.")
+        if post.status != PostStatus.SCHEDULED.value:
+            raise InvalidStateError("Only posts in 'scheduled' status can be approved.")
+        if post.version != payload.expected_version:
+            raise VersionConflictError(
+                "The post was modified by another request. Refresh and try again."
+            )
+
+        connection = await self._require_schedulable_connection(
+            user=user,
+            connection_id=post.linkedin_connection_id,
+        )
+        updated = await self._repo.update_if_version(
+            post=post,
+            expected_version=payload.expected_version,
+            updated_at=clock,
+        )
+        if updated is None:
+            await self._db.refresh(post)
+            if post.status != PostStatus.SCHEDULED.value:
+                raise InvalidStateError("Only posts in 'scheduled' status can be approved.")
+            raise VersionConflictError(
+                "The post was modified by another request. Refresh and try again."
+            )
+        apply_publish_approval(updated, approved_by=user.id, clock=clock)
+        await self._db.commit()
+        await self._db.refresh(updated)
+        logger.info("posts.publish_approved", post_id=str(updated.id), user_id=str(user.id))
         return self._to_response(updated, connection=connection, clock=clock)
 
     async def cancel(
@@ -270,28 +336,44 @@ class PostService:
         if post.status == PostStatus.CANCELLED.value:
             return self._to_response(post, connection=connection, clock=clock)
 
+        if post.status == PostStatus.PROCESSING.value:
+            raise InvalidStateError(
+                "This post is already processing. Cancellation can no longer be guaranteed "
+                "if LinkedIn submission has started."
+            )
         if post.status != PostStatus.SCHEDULED.value:
             raise InvalidStateError(
-                "Only posts in 'scheduled' status can be cancelled in this phase."
+                "Only posts in 'scheduled' status can be cancelled."
             )
         if post.version != expected_version:
             raise VersionConflictError(
                 "The post was modified by another request. Refresh and try again."
             )
 
+        revoke_publish_approval(post, clock=clock)
         updated = await self._repo.update_if_version(
             post=post,
             expected_version=expected_version,
             status=PostStatus.CANCELLED.value,
             updated_at=clock,
+            approval_revoked_at=post.approval_revoked_at,
+            publish_approved_at=post.publish_approved_at,
+            publish_approved_by=post.publish_approved_by,
+            approved_content_hash=post.approved_content_hash,
+            approved_version=post.approved_version,
         )
         if updated is None:
             await self._db.refresh(post)
             if post.status == PostStatus.CANCELLED.value:
                 return self._to_response(post, connection=connection, clock=clock)
+            if post.status == PostStatus.PROCESSING.value:
+                raise InvalidStateError(
+                    "This post is already processing. Cancellation can no longer be guaranteed "
+                    "if LinkedIn submission has started."
+                )
             if post.status != PostStatus.SCHEDULED.value:
                 raise InvalidStateError(
-                    "Only posts in 'scheduled' status can be cancelled in this phase."
+                    "Only posts in 'scheduled' status can be cancelled."
                 )
             raise VersionConflictError(
                 "The post was modified by another request. Refresh and try again."
@@ -395,6 +477,7 @@ class PostService:
                 "linkedin_forbidden",
             }
         )
+        approved = is_db_publish_approved(post)
         return ScheduledPostResponse(
             id=post.id,
             linkedin_connection_id=post.linkedin_connection_id,
@@ -418,6 +501,10 @@ class PostService:
             connection_expires_before_schedule=expires_before,
             connection_expiry_warning=warning,
             reconnect_required=reconnect,
+            publish_approved=approved,
+            publish_approved_at=post.publish_approved_at,
+            publish_approved_by=post.publish_approved_by,
+            approval_revoked_at=post.approval_revoked_at,
         )
 
     async def list_attempts(

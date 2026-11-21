@@ -26,7 +26,13 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture
 async def pg_factory() -> AsyncIterator[tuple[async_sessionmaker[AsyncSession], Settings]]:
-    settings = Settings()
+    # Isolate from developer .env live LinkedIn / canary flags.
+    settings = Settings(
+        publish_provider="fake",
+        enable_real_publishing=False,
+        live_publish_require_canary=True,
+        live_publish_canary_post_ids=[],
+    )
     engine = create_engine(settings)
     factory = create_session_factory(engine)
     yield factory, settings

@@ -33,10 +33,10 @@ export function SchedulePostForm() {
   );
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const idempotencyKeyRef = useRef("");
 
   useEffect(() => {
-    // Defer past prerender: Date.now / Intl timezone must run on the client only.
     const timer = window.setTimeout(() => {
       const zone = guessBrowserTimezone();
       setTimezone(zone);
@@ -75,6 +75,8 @@ export function SchedulePostForm() {
     }
   }, [localWhen, timezone]);
 
+  const accountLabel = connection?.displayName ?? "Connected LinkedIn account";
+
   const canSchedule =
     loadState === "ready" &&
     connection?.connected === true &&
@@ -85,8 +87,14 @@ export function SchedulePostForm() {
     Boolean(previewIso) &&
     !submitting;
 
-  async function handleSubmit(event: FormEvent) {
+  function handleSubmit(event: FormEvent) {
     event.preventDefault();
+    if (!canSchedule) return;
+    setError(null);
+    setConfirmOpen(true);
+  }
+
+  async function confirmAndSchedule() {
     if (!connection?.id || !previewIso || submitting) return;
 
     setSubmitting(true);
@@ -98,15 +106,16 @@ export function SchedulePostForm() {
           scheduledAt: previewIso,
           timezone,
           linkedinConnectionId: connection.id,
+          confirmPublish: true,
         },
         idempotencyKeyRef.current,
       );
       idempotencyKeyRef.current = newIdempotencyKey();
       router.push(`/posts/${post.id}`);
     } catch (err) {
-      // Keep the same idempotency key so a network retry does not create duplicates.
       setError(err instanceof Error ? err.message : "Could not schedule the post.");
       setSubmitting(false);
+      setConfirmOpen(false);
     }
   }
 
@@ -149,110 +158,144 @@ export function SchedulePostForm() {
   }
 
   return (
-    <form onSubmit={(event) => void handleSubmit(event)} className="flex max-w-2xl flex-col gap-6">
-      <div className="flex flex-col gap-2">
-        <label htmlFor="linkedin-account" className="text-sm font-medium">
-          LinkedIn account
-        </label>
-        <select
-          id="linkedin-account"
-          className={fieldClass}
-          value={connection.id}
-          disabled
-          aria-describedby="linkedin-account-help"
-        >
-          <option value={connection.id}>
-            {connection.displayName ?? "Connected LinkedIn account"}
-          </option>
-        </select>
-        <p id="linkedin-account-help" className="text-xs text-muted-foreground">
-          Posts publish as this connected account. Multiple LinkedIn accounts are not supported yet.
-        </p>
-      </div>
-
-      <div className="flex flex-col gap-2">
-        <div className="flex items-baseline justify-between gap-3">
-          <label htmlFor="post-content" className="text-sm font-medium">
-            Post content
-          </label>
-          <span className="text-xs text-muted-foreground">
-            {content.trim().length} / {CONTENT_MAX}
-          </span>
-        </div>
-        <textarea
-          id="post-content"
-          className={`${fieldClass} min-h-40 resize-y`}
-          value={content}
-          maxLength={CONTENT_MAX}
-          required
-          onChange={(event) => setContent(event.target.value)}
-        />
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-2">
+    <>
+      <form onSubmit={handleSubmit} className="flex max-w-2xl flex-col gap-6">
         <div className="flex flex-col gap-2">
-          <label htmlFor="local-when" className="text-sm font-medium">
-            Local date and time
-          </label>
-          <input
-            id="local-when"
-            type="datetime-local"
-            className={fieldClass}
-            value={localWhen}
-            required
-            onChange={(event) => setLocalWhen(event.target.value)}
-          />
-        </div>
-        <div className="flex flex-col gap-2">
-          <label htmlFor="timezone" className="text-sm font-medium">
-            Timezone (IANA)
+          <label htmlFor="linkedin-account" className="text-sm font-medium">
+            LinkedIn account
           </label>
           <select
-            id="timezone"
+            id="linkedin-account"
             className={fieldClass}
-            value={timezone}
-            onChange={(event) => setTimezone(event.target.value)}
+            value={connection.id}
+            disabled
+            aria-describedby="linkedin-account-help"
           >
-            {timezones.map((zone) => (
-              <option key={zone} value={zone}>
-                {zone}
-              </option>
-            ))}
+            <option value={connection.id}>{accountLabel}</option>
           </select>
-        </div>
-      </div>
-
-      <div className="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm">
-        <p className="font-medium">Scheduled instant</p>
-        {previewIso ? (
-          <p className="mt-1 text-muted-foreground">
-            {formatInTimezone(previewIso, timezone)} ({timezone})
-            <br />
-            <span className="font-mono text-xs">{previewIso}</span>
+          <p id="linkedin-account-help" className="text-xs text-muted-foreground">
+            Posts publish as this connected account.
           </p>
-        ) : (
-          <p className="mt-1 text-destructive">Enter a valid local date and time.</p>
-        )}
-        <p className="mt-2 text-xs text-muted-foreground">
-          The API stores UTC and keeps your IANA timezone for display. Naive local times are not
-          accepted.
-        </p>
-      </div>
+        </div>
 
-      {error ? (
-        <p className="text-sm text-destructive" role="alert">
-          {error}
-        </p>
+        <div className="flex flex-col gap-2">
+          <div className="flex items-baseline justify-between gap-3">
+            <label htmlFor="post-content" className="text-sm font-medium">
+              Post content
+            </label>
+            <span className="text-xs text-muted-foreground">
+              {content.trim().length} / {CONTENT_MAX}
+            </span>
+          </div>
+          <textarea
+            id="post-content"
+            className={`${fieldClass} min-h-40 resize-y`}
+            value={content}
+            maxLength={CONTENT_MAX}
+            required
+            onChange={(event) => setContent(event.target.value)}
+          />
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="flex flex-col gap-2">
+            <label htmlFor="local-when" className="text-sm font-medium">
+              Local date and time
+            </label>
+            <input
+              id="local-when"
+              type="datetime-local"
+              className={fieldClass}
+              value={localWhen}
+              required
+              onChange={(event) => setLocalWhen(event.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <label htmlFor="timezone" className="text-sm font-medium">
+              Timezone (IANA)
+            </label>
+            <select
+              id="timezone"
+              className={fieldClass}
+              value={timezone}
+              onChange={(event) => setTimezone(event.target.value)}
+            >
+              {timezones.map((zone) => (
+                <option key={zone} value={zone}>
+                  {zone}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm">
+          <p className="font-medium">Scheduled instant</p>
+          {previewIso ? (
+            <p className="mt-1 text-muted-foreground">
+              {formatInTimezone(previewIso, timezone)} ({timezone})
+            </p>
+          ) : (
+            <p className="mt-1 text-destructive">Enter a valid local date and time.</p>
+          )}
+        </div>
+
+        {error ? (
+          <p className="text-sm text-destructive" role="alert">
+            {error}
+          </p>
+        ) : null}
+
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" disabled={!canSchedule}>
+            Schedule &amp; Publish
+          </Button>
+          <Button type="button" variant="outline" render={<Link href="/posts" />}>
+            Cancel
+          </Button>
+        </div>
+      </form>
+
+      {confirmOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="publish-confirm-title"
+        >
+          <div className="w-full max-w-md rounded-lg border border-border bg-background p-5 shadow-lg">
+            <h2 id="publish-confirm-title" className="text-lg font-semibold">
+              Confirm LinkedIn publication
+            </h2>
+            <p className="mt-3 text-sm text-muted-foreground">
+              This post will automatically publish to{" "}
+              <span className="font-medium text-foreground">{accountLabel}</span> on{" "}
+              <span className="font-medium text-foreground">
+                {previewIso ? formatInTimezone(previewIso, timezone) : "the selected time"}
+              </span>
+              .
+            </p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Confirming stores publishing approval with your signed-in account. No UUID or
+              environment edits are required.
+            </p>
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={submitting}
+                onClick={() => setConfirmOpen(false)}
+              >
+                Go back
+              </Button>
+              <Button type="button" disabled={submitting} onClick={() => void confirmAndSchedule()}>
+                {submitting ? "Scheduling…" : "Confirm & schedule"}
+              </Button>
+            </div>
+          </div>
+        </div>
       ) : null}
-
-      <div className="flex flex-wrap gap-2">
-        <Button type="submit" disabled={!canSchedule}>
-          {submitting ? "Scheduling…" : "Schedule post"}
-        </Button>
-        <Button type="button" variant="outline" render={<Link href="/posts" />}>
-          Cancel
-        </Button>
-      </div>
-    </form>
+    </>
   );
 }

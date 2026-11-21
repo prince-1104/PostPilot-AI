@@ -13,11 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.models import LinkedInConnection, PublishAttempt, ScheduledPost
 from app.models.enums import AttemptExecutionState, ConnectionStatus, PostStatus
-from app.publishing.base import LinkedInPublisher
-from app.publishing.canary import (
-    defer_unapproved_post,
-    is_post_canary_approved,
+from app.publishing.authorization import (
+    APPROVAL_DEFER_SECONDS,
+    db_approval_required,
+    defer_unauthorized_post,
+    is_db_publish_approved,
 )
+from app.publishing.base import LinkedInPublisher
+from app.publishing.canary import is_post_canary_approved
 from app.publishing.outcomes import (
     OutcomeKind,
     PublishExecutionContext,
@@ -62,17 +65,20 @@ class PublishExecutor:
         )
         return True
 
-    async def release_canary_block(
-        self, *, claim: ClaimResult, now: datetime | None = None
+    async def release_authorization_block(
+        self,
+        *,
+        claim: ClaimResult,
+        error_code: str,
+        error_category: str,
+        now: datetime | None = None,
     ) -> str:
-        """Undo a claim for an unapproved canary post without failed/published.
+        """Undo a claim for an unauthorized post without failed/published.
 
         The attempt is recorded as a non-submission safety skip; the post returns to
         ``scheduled`` with a deferred ``next_attempt_at`` so it is not re-dispatched
         immediately. No LinkedIn HTTP call is made.
         """
-        from app.publishing.canary import CANARY_DEFER_SECONDS
-
         clock = now or datetime.now(UTC)
         post, attempt = await self._lock_owned(claim)
         if post is None or attempt is None:
@@ -80,9 +86,9 @@ class PublishExecutor:
 
         attempt.execution_state = AttemptExecutionState.RETRYABLE_FAILURE.value
         attempt.finished_at = clock
-        attempt.error_category = "canary"
-        attempt.sanitized_error_code = "live_publish_canary_blocked"
-        attempt.next_retry_at = clock + timedelta(seconds=CANARY_DEFER_SECONDS)
+        attempt.error_category = error_category
+        attempt.sanitized_error_code = error_code
+        attempt.next_retry_at = clock + timedelta(seconds=APPROVAL_DEFER_SECONDS)
         attempt.updated_at = clock
 
         post.status = PostStatus.SCHEDULED.value
@@ -95,12 +101,24 @@ class PublishExecutor:
         post.version += 1
         await self._db.commit()
         logger.info(
-            "publish.canary.released_claim",
+            "publish.authorization.released_claim",
             post_id=str(post.id),
             attempt_id=str(attempt.id),
+            error_code=error_code,
             next_attempt_at=post.next_attempt_at.isoformat() if post.next_attempt_at else None,
         )
-        return "canary_blocked"
+        return error_code
+
+    async def release_canary_block(
+        self, *, claim: ClaimResult, now: datetime | None = None
+    ) -> str:
+        """Undo a claim for an unapproved canary post without failed/published."""
+        return await self.release_authorization_block(
+            claim=claim,
+            error_code="live_publish_canary_blocked",
+            error_category="canary",
+            now=now,
+        )
 
     def invoke_publisher(self, *, claim: ClaimResult) -> PublishOutcome:
         """Call the publisher outside any DB transaction."""
@@ -390,14 +408,21 @@ async def run_publish_pipeline(
     from app.services.publishing.claim import ClaimService
 
     clock = now or datetime.now(UTC)
+
+    # Cheap pre-claim canary check (ID allowlist only — avoids loading the row unlocked).
     if not is_post_canary_approved(settings, post_id):
-        await defer_unapproved_post(
-            session, settings=settings, post_id=post_id, now=clock
+        await defer_unauthorized_post(
+            session,
+            settings=settings,
+            post_id=post_id,
+            reason="live_publish_canary_blocked",
+            now=clock,
         )
         logger.info(
-            "publish.canary.blocked_before_claim",
+            "publish.authorization.blocked_before_claim",
             post_id=str(post_id),
             worker_id=worker_id,
+            reason="canary_blocked",
         )
         return "canary_blocked"
 
@@ -412,10 +437,18 @@ async def run_publish_pipeline(
 
     executor = PublishExecutor(session, settings=settings, publisher=publisher)
 
-    # Defense in depth if settings changed between dispatch and claim.
+    # Defense in depth: canary + durable DB approval after the row lock.
     if not is_post_canary_approved(settings, claim.post.id):
         await executor.release_canary_block(claim=claim, now=clock)
         return "canary_blocked"
+    if db_approval_required(settings) and not is_db_publish_approved(claim.post):
+        await executor.release_authorization_block(
+            claim=claim,
+            error_code="publish_approval_required",
+            error_category="approval",
+            now=clock,
+        )
+        return "publish_approval_required"
 
     marked = await executor.mark_submitting(claim=claim, now=clock)
     if not marked:

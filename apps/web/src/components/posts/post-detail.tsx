@@ -8,6 +8,7 @@ import { PostStatusBadge } from "@/components/posts/post-status-badge";
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api/client";
 import {
+  approvePost,
   cancelPost,
   getPost,
   listPostAttempts,
@@ -99,15 +100,30 @@ export function PostDetail({ postId }: { postId: string }) {
 
   async function handleSave() {
     if (!post) return;
+    const scheduledAt = wallTimeToOffsetAwareIso(localWhen, timezone);
+    const materialChange =
+      content.trim() !== post.content ||
+      scheduledAt !== post.scheduledAt ||
+      timezone !== post.timezone;
+    if (materialChange) {
+      const whenLabel = formatInTimezone(scheduledAt, timezone);
+      if (
+        !window.confirm(
+          `Save changes and renew LinkedIn publishing approval?\n\nThis post will automatically publish on ${whenLabel}.`,
+        )
+      ) {
+        return;
+      }
+    }
     setBusy(true);
     setError(null);
     try {
-      const scheduledAt = wallTimeToOffsetAwareIso(localWhen, timezone);
       const updated = await updatePost(post.id, {
         expectedVersion: post.version,
         content: content.trim(),
         scheduledAt,
         timezone,
+        ...(materialChange ? { confirmPublish: true as const } : {}),
       });
       setPost(updated);
       setContent(updated.content);
@@ -121,11 +137,42 @@ export function PostDetail({ postId }: { postId: string }) {
     }
   }
 
-  async function handleCancel() {
+  async function handleApprove() {
     if (!post) return;
+    const whenLabel = formatInTimezone(post.scheduledAt, post.timezone);
     if (
       !window.confirm(
-        "Cancel this scheduled post? It will not be published.",
+        `Approve this post for LinkedIn publishing?\n\nIt will automatically publish on ${whenLabel}.`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await approvePost(post.id, {
+        expectedVersion: post.version,
+        confirmPublish: true,
+      });
+      setPost(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Approval failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCancel() {
+    if (!post) return;
+    if (post.status === "processing") {
+      window.alert(
+        "This post is already processing. Cancellation can no longer be guaranteed if LinkedIn submission has started.",
+      );
+      return;
+    }
+    if (
+      !window.confirm(
+        "Cancel this scheduled post? Publishing approval will be revoked and it will not be published.",
       )
     ) {
       return;
@@ -191,46 +238,50 @@ export function PostDetail({ postId }: { postId: string }) {
         </p>
       ) : null}
 
-      {post.status === "scheduled" && readiness ? (
+      {post.status === "scheduled" ? (
         <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-sm">
-          <p className="font-medium">Live LinkedIn approval</p>
-          <p className="mt-1 font-mono text-xs break-all">Post ID: {post.id}</p>
+          <p className="font-medium">Publishing approval</p>
           <p className="mt-2 text-muted-foreground">
-            Provider: <span className="font-mono">{readiness.publishProvider}</span>
-            {" · "}
-            Real publishing: {readiness.enableRealPublishing ? "on" : "off"}
-            {" · "}
-            Canary approved for this post:{" "}
-            {readiness.selectedPostCanaryApproved ? "yes" : "no"}
+            Database approval:{" "}
+            {post.publishApproved ? (
+              <span className="text-emerald-800 dark:text-emerald-200">approved</span>
+            ) : (
+              <span className="text-amber-800 dark:text-amber-200">not approved</span>
+            )}
+            {post.publishApprovedAt
+              ? ` · ${formatInTimezone(post.publishApprovedAt, post.timezone)}`
+              : null}
           </p>
-          {!readiness.enableRealPublishing || readiness.publishProvider !== "linkedin" ? (
-            <p className="mt-2 text-xs text-muted-foreground">
-              To publish this post on your real LinkedIn profile, set{" "}
-              <span className="font-mono">PUBLISH_PROVIDER=linkedin</span>,{" "}
-              <span className="font-mono">ENABLE_REAL_PUBLISHING=true</span>, keep{" "}
-              <span className="font-mono">LIVE_PUBLISH_REQUIRE_CANARY=true</span>, and set{" "}
-              <span className="font-mono">LIVE_PUBLISH_CANARY_POST_IDS</span> to this UUID only.
-              Then recreate api/worker/beat. See docs/live-e2e-publishing.md.
-            </p>
-          ) : readiness.selectedPostCanaryApproved ? (
-            <p className="mt-2 text-xs text-emerald-800 dark:text-emerald-200">
-              This post is on the live canary allowlist. When it becomes due, the worker will call
-              LinkedIn&apos;s real Posts API (not the fake publisher).
-            </p>
+          {!post.publishApproved ? (
+            <div className="mt-3 flex flex-col gap-2">
+              <p className="text-xs text-muted-foreground">
+                Historical or unconfirmed posts stay blocked until you explicitly approve them.
+              </p>
+              <Button type="button" size="sm" disabled={busy} onClick={() => void handleApprove()}>
+                Approve for LinkedIn publishing
+              </Button>
+            </div>
           ) : (
-            <p className="mt-2 text-xs text-amber-800 dark:text-amber-200">
-              Real publishing is enabled, but this UUID is not on{" "}
-              <span className="font-mono">LIVE_PUBLISH_CANARY_POST_IDS</span>. It will not be
-              sent to LinkedIn until you approve it explicitly.
+            <p className="mt-2 text-xs text-muted-foreground">
+              When due, Celery will publish this approved post to your connected LinkedIn account
+              (subject to connection health
+              {readiness?.livePublishRequireCanary
+                ? " and any active operator canary gate"
+                : ""}
+              ).
             </p>
           )}
-          {readiness.pendingScheduledNonCanary > 0 ? (
-            <p className="mt-2 text-xs text-muted-foreground">
-              {readiness.pendingScheduledNonCanary} other scheduled post(s) remain blocked by the
-              canary gate.
-            </p>
-          ) : null}
         </div>
+      ) : null}
+
+      {post.status === "requires_review" ? (
+        <p
+          className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-100"
+          role="status"
+        >
+          This post requires review. It will not automatically republish. Inspect attempt history
+          and LinkedIn before taking manual action.
+        </p>
       ) : null}
 
       {editing && canEdit ? (

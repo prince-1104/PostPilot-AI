@@ -24,7 +24,7 @@ from app.publishing.person_urn import (
 from app.publishing.real import RealLinkedInPublisher
 from app.services.publishing.claim import ClaimService
 from app.services.publishing.executor import run_publish_pipeline
-from tests.conftest import seed_user_session_and_connection
+from tests.conftest import seed_user_session_and_connection, stamp_publish_approval
 
 
 def _ctx() -> PublishExecutionContext:
@@ -378,6 +378,7 @@ async def test_real_success_persists_urn(
         created_at=now,
         updated_at=now,
     )
+    stamp_publish_approval(post, approved_by=_user.id, clock=now)
     db_session.add(post)
     await db_session.commit()
 
@@ -451,6 +452,7 @@ async def test_ambiguous_never_auto_republished(
         created_at=now,
         updated_at=now,
     )
+    stamp_publish_approval(post, approved_by=_user.id, clock=now)
     db_session.add(post)
     await db_session.commit()
 

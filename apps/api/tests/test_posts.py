@@ -41,6 +41,7 @@ async def test_create_requires_auth(db_client) -> None:
             "content": "Hello",
             "scheduled_at": when.isoformat(),
             "timezone": tz,
+            "confirm_publish": True,
             "linkedin_connection_id": str(uuid4()),
         },
     )
@@ -63,6 +64,7 @@ async def test_create_and_get_post(
             "content": "Shipping Phase 3",
             "scheduled_at": when.isoformat(),
             "timezone": tz,
+            "confirm_publish": True,
             "linkedin_connection_id": str(connection.id),
         },
     )
@@ -72,6 +74,8 @@ async def test_create_and_get_post(
     assert body["status"] == "scheduled"
     assert body["version"] == 1
     assert body["timezone"] == "Asia/Kolkata"
+    assert body["publish_approved"] is True
+    assert body["publish_approved_by"] == str(_user.id)
     assert "token" not in body
 
     fetched = await db_client.get(
@@ -99,6 +103,7 @@ async def test_missing_connection_and_wrong_owner(
             "content": "Nope",
             "scheduled_at": when.isoformat(),
             "timezone": tz,
+            "confirm_publish": True,
             "linkedin_connection_id": str(uuid4()),
         },
     )
@@ -111,6 +116,7 @@ async def test_missing_connection_and_wrong_owner(
             "content": "Nope",
             "scheduled_at": when.isoformat(),
             "timezone": tz,
+            "confirm_publish": True,
             "linkedin_connection_id": str(other_conn.id),
         },
     )
@@ -132,6 +138,7 @@ async def test_missing_posting_permission(db_client, db_session, token_encryptor
             "content": "No publish scope",
             "scheduled_at": when.isoformat(),
             "timezone": tz,
+            "confirm_publish": True,
             "linkedin_connection_id": str(connection.id),
         },
     )
@@ -152,6 +159,7 @@ async def test_invalid_blank_and_naive_datetime(db_client, db_session, token_enc
             "content": "   ",
             "scheduled_at": (datetime.now(UTC) + timedelta(hours=2)).isoformat(),
             "timezone": "UTC",
+            "confirm_publish": True,
             "linkedin_connection_id": str(connection.id),
         },
     )
@@ -164,6 +172,7 @@ async def test_invalid_blank_and_naive_datetime(db_client, db_session, token_enc
             "content": "Naive",
             "scheduled_at": "2026-12-01T10:00:00",
             "timezone": "UTC",
+            "confirm_publish": True,
             "linkedin_connection_id": str(connection.id),
         },
     )
@@ -183,6 +192,7 @@ async def test_past_schedule_rejected(db_client, db_session, token_encryptor) ->
             "content": "Too late",
             "scheduled_at": past.isoformat(),
             "timezone": "UTC",
+            "confirm_publish": True,
             "linkedin_connection_id": str(connection.id),
         },
     )
@@ -203,6 +213,7 @@ async def test_timezone_offset_mismatch(db_client, db_session, token_encryptor) 
             "content": "Mismatch",
             "scheduled_at": when.isoformat(),
             "timezone": "America/New_York",
+            "confirm_publish": True,
             "linkedin_connection_id": str(connection.id),
         },
     )
@@ -222,6 +233,7 @@ async def test_idempotency_same_and_different_payload(
         "content": "Same payload",
         "scheduled_at": when.isoformat(),
         "timezone": tz,
+        "confirm_publish": True,
         "linkedin_connection_id": str(connection.id),
     }
     first = await db_client.post(
@@ -263,6 +275,7 @@ async def test_user_isolation(db_client, db_session, token_encryptor) -> None:
             "content": "Private",
             "scheduled_at": when.isoformat(),
             "timezone": tz,
+            "confirm_publish": True,
             "linkedin_connection_id": str(conn_a.id),
         },
     )
@@ -289,6 +302,7 @@ async def test_list_filter_and_pagination(db_client, db_session, token_encryptor
                 "content": f"Post {i}",
                 "scheduled_at": when.isoformat(),
                 "timezone": "UTC",
+                "confirm_publish": True,
                 "linkedin_connection_id": str(connection.id),
             },
         )
@@ -328,6 +342,7 @@ async def test_edit_reschedule_version_and_cancel(
             "content": "Original",
             "scheduled_at": when.isoformat(),
             "timezone": tz,
+            "confirm_publish": True,
             "linkedin_connection_id": str(connection.id),
         },
     )
@@ -336,7 +351,7 @@ async def test_edit_reschedule_version_and_cancel(
     stale = await db_client.patch(
         f"/api/v1/posts/{post['id']}",
         headers=_auth_headers(raw),
-        json={"expected_version": 99, "content": "Stale"},
+        json={"expected_version": 99, "content": "Stale", "confirm_publish": True},
     )
     assert stale.status_code == 409
 
@@ -348,6 +363,7 @@ async def test_edit_reschedule_version_and_cancel(
             "content": "Updated copy",
             "scheduled_at": new_when.isoformat(),
             "timezone": "UTC",
+            "confirm_publish": True,
         },
     )
     assert updated.status_code == 200, updated.text
@@ -373,7 +389,7 @@ async def test_edit_reschedule_version_and_cancel(
     edit_cancelled = await db_client.patch(
         f"/api/v1/posts/{post['id']}",
         headers=_auth_headers(raw),
-        json={"expected_version": 3, "content": "Nope"},
+        json={"expected_version": 3, "content": "Nope", "confirm_publish": True},
     )
     assert edit_cancelled.status_code == 409
 
@@ -393,6 +409,7 @@ async def test_cannot_edit_processing_or_published(
             "content": "Locked later",
             "scheduled_at": when.isoformat(),
             "timezone": tz,
+            "confirm_publish": True,
             "linkedin_connection_id": str(connection.id),
         },
     )
@@ -406,7 +423,7 @@ async def test_cannot_edit_processing_or_published(
     response = await db_client.patch(
         f"/api/v1/posts/{post_id}",
         headers=_auth_headers(raw),
-        json={"expected_version": 1, "content": "No"},
+        json={"expected_version": 1, "content": "No", "confirm_publish": True},
     )
     assert response.status_code == 409
 
@@ -436,6 +453,7 @@ async def test_connection_expiry_warning(db_client, db_session, token_encryptor)
             "content": "Token expires first",
             "scheduled_at": when.isoformat(),
             "timezone": "UTC",
+            "confirm_publish": True,
             "linkedin_connection_id": str(connection.id),
         },
     )
@@ -458,6 +476,7 @@ async def test_missing_idempotency_header(db_client, db_session, token_encryptor
             "content": "No key",
             "scheduled_at": when.isoformat(),
             "timezone": tz,
+            "confirm_publish": True,
             "linkedin_connection_id": str(connection.id),
         },
     )

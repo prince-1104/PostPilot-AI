@@ -210,9 +210,21 @@ export function PostsList() {
                     Next retry: {formatInTimezone(post.nextAttemptAt, post.timezone)}
                   </p>
                 ) : null}
+                {post.status === "scheduled" ? (
+                  <p className="text-xs text-muted-foreground">
+                    {post.publishApproved
+                      ? "Approved for LinkedIn publishing"
+                      : "Not approved — will not publish until confirmed"}
+                  </p>
+                ) : null}
                 {post.publicationSimulated ? (
                   <p className="text-xs text-muted-foreground">
                     Not a real LinkedIn post (test/simulation URN)
+                  </p>
+                ) : null}
+                {post.status === "requires_review" ? (
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    Requires review — will not auto-republish
                   </p>
                 ) : null}
                 {post.connectionExpiryWarning ? (

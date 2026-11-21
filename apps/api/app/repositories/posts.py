@@ -66,6 +66,11 @@ class PostRepository:
                 created_at=post.created_at,
                 updated_at=post.updated_at,
                 published_at=post.published_at,
+                publish_approved_at=post.publish_approved_at,
+                publish_approved_by=post.publish_approved_by,
+                approved_content_hash=post.approved_content_hash,
+                approved_version=post.approved_version,
+                approval_revoked_at=post.approval_revoked_at,
             )
             .on_conflict_do_nothing(constraint="uq_scheduled_posts_user_id_idempotency_key")
             .returning(ScheduledPost.id)

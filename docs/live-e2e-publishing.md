@@ -11,22 +11,34 @@ do not invent a member ID.
 
 ## Safety model
 
-Live publishing requires **all** of:
+Every real LinkedIn publish also requires **durable database approval** on the post
+(`publish_approved_at` + matching content/schedule hash). The UI Schedule & Publish
+confirmation (or Approve on an existing scheduled post) stamps that approval from the
+authenticated session. Historical rows stay unapproved until the user confirms them.
+
+### Test canary mode (initial live verification)
 
 | Variable | Safe default | Live test value |
 | --- | --- | --- |
 | `PUBLISH_PROVIDER` | `fake` | `linkedin` |
 | `ENABLE_REAL_PUBLISHING` | `false` | `true` |
 | `LIVE_PUBLISH_REQUIRE_CANARY` | `true` | `true` |
-| `LIVE_PUBLISH_CANARY_POST_IDS` | _(empty)_ | **one** approved post UUID |
+| `LIVE_PUBLISH_CANARY_POST_IDS` | _(empty)_ | **one** DB-approved post UUID |
 
 With canary required and an empty allowlist, **no** LinkedIn API publishes occur even
-if the real provider is enabled. Historical scheduled posts are not leased for dispatch.
+if the real provider is enabled and posts are DB-approved.
 
-After verification, clear the allowlist and set `PUBLISH_PROVIDER=fake` /
-`ENABLE_REAL_PUBLISHING=false` again (recommended). To disable the canary gate entirely
-set `LIVE_PUBLISH_REQUIRE_CANARY=false` — only after you accept that every due post may
-publish.
+### Normal production mode (after one successful canary)
+
+| Variable | Value |
+| --- | --- |
+| `PUBLISH_PROVIDER` | `linkedin` |
+| `ENABLE_REAL_PUBLISHING` | `true` |
+| `LIVE_PUBLISH_REQUIRE_CANARY` | `false` |
+
+Disabling the canary **never** bypasses per-post database approval. Due unapproved
+posts are not leased. Do not flip canary off until the user explicitly authorizes
+production mode after a verified live canary post.
 
 ## Diagnostic endpoint (no secrets)
 

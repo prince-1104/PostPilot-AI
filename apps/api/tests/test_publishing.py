@@ -360,6 +360,7 @@ async def test_attempts_api_user_isolation(
             "content": "isolation",
             "scheduled_at": when.isoformat(),
             "timezone": "UTC",
+            "confirm_publish": True,
             "linkedin_connection_id": str(conn_a.id),
         },
     )

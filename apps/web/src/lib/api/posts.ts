@@ -29,6 +29,10 @@ export interface ScheduledPost {
   connectionExpiresBeforeSchedule: boolean;
   connectionExpiryWarning: string | null;
   reconnectRequired: boolean;
+  publishApproved: boolean;
+  publishApprovedAt: string | null;
+  publishApprovedBy: string | null;
+  approvalRevokedAt: string | null;
 }
 
 export interface PublishAttempt {
@@ -56,6 +60,7 @@ export interface CreateScheduledPostInput {
   scheduledAt: string;
   timezone: string;
   linkedinConnectionId: string;
+  confirmPublish: true;
 }
 
 export interface UpdateScheduledPostInput {
@@ -63,6 +68,12 @@ export interface UpdateScheduledPostInput {
   content?: string;
   scheduledAt?: string;
   timezone?: string;
+  confirmPublish?: true;
+}
+
+export interface ApproveScheduledPostInput {
+  expectedVersion: number;
+  confirmPublish: true;
 }
 
 const POST_STATUSES: ReadonlySet<string> = new Set([
@@ -125,6 +136,10 @@ export function parseScheduledPost(payload: unknown): ScheduledPost {
     connectionExpiresBeforeSchedule: Boolean(payload.connection_expires_before_schedule),
     connectionExpiryWarning: optionalString(payload.connection_expiry_warning),
     reconnectRequired: Boolean(payload.reconnect_required),
+    publishApproved: Boolean(payload.publish_approved),
+    publishApprovedAt: optionalString(payload.publish_approved_at),
+    publishApprovedBy: optionalString(payload.publish_approved_by),
+    approvalRevokedAt: optionalString(payload.approval_revoked_at),
   };
 }
 
@@ -218,6 +233,7 @@ export async function createPost(
       scheduled_at: input.scheduledAt,
       timezone: input.timezone,
       linkedin_connection_id: input.linkedinConnectionId,
+      confirm_publish: input.confirmPublish,
     },
   });
 }
@@ -233,6 +249,22 @@ export async function updatePost(
       ...(input.content !== undefined ? { content: input.content } : {}),
       ...(input.scheduledAt !== undefined ? { scheduled_at: input.scheduledAt } : {}),
       ...(input.timezone !== undefined ? { timezone: input.timezone } : {}),
+      ...(input.confirmPublish !== undefined
+        ? { confirm_publish: input.confirmPublish }
+        : {}),
+    },
+  });
+}
+
+export async function approvePost(
+  postId: string,
+  input: ApproveScheduledPostInput,
+): Promise<ScheduledPost> {
+  return apiPostJson(`/api/v1/posts/${postId}/approve`, parseScheduledPost, {
+    credentials: "include",
+    body: {
+      expected_version: input.expectedVersion,
+      confirm_publish: input.confirmPublish,
     },
   });
 }

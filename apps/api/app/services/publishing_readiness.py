@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.models import LinkedInConnection, ScheduledPost, User
 from app.models.enums import ConnectionStatus, PostStatus
+from app.publishing.authorization import is_db_publish_approved
 from app.publishing.canary import canary_enforced, is_post_canary_approved
 from app.publishing.person_urn import PersonUrnError, person_urn_from_oidc_subject
 from app.schemas.publishing_readiness import PublishingReadinessResponse, ReadinessCheck
@@ -164,6 +165,7 @@ class PublishingReadinessService:
 
         selected_status: str | None = None
         selected_approved: bool | None = None
+        selected_db_approved: bool | None = None
         if post_id is not None:
             post = (
                 await self._db.execute(
@@ -175,6 +177,7 @@ class PublishingReadinessService:
             ).scalar_one_or_none()
             if post is None:
                 selected_approved = False
+                selected_db_approved = False
                 checks.append(
                     ReadinessCheck(
                         key="selected_post",
@@ -184,7 +187,19 @@ class PublishingReadinessService:
                 )
             else:
                 selected_status = post.status
+                selected_db_approved = is_db_publish_approved(post)
                 selected_approved = is_post_canary_approved(self._settings, post.id)
+                checks.append(
+                    ReadinessCheck(
+                        key="selected_post_db_approval",
+                        ok=selected_db_approved,
+                        detail=(
+                            "Post has durable database publishing approval."
+                            if selected_db_approved
+                            else "Post is not database-approved for LinkedIn publishing."
+                        ),
+                    )
+                )
                 checks.append(
                     ReadinessCheck(
                         key="selected_post_canary",
@@ -192,7 +207,7 @@ class PublishingReadinessService:
                         detail=(
                             "Post ID is on LIVE_PUBLISH_CANARY_POST_IDS."
                             if selected_approved
-                            else "Post ID is NOT approved for live publishing."
+                            else "Post ID is NOT on the temporary canary allowlist."
                         ),
                     )
                 )
@@ -229,6 +244,7 @@ class PublishingReadinessService:
             person_urn=person_urn if connected else None,
             selected_post_id=post_id,
             selected_post_canary_approved=selected_approved,
+            selected_post_db_approved=selected_db_approved,
             selected_post_status=selected_status,
             pending_scheduled_posts=pending,
             pending_scheduled_non_canary=pending_non_canary,

@@ -19,7 +19,7 @@ from app.models import PublishAttempt, ScheduledPost
 from app.models.enums import PostStatus
 from app.publishing.real import RealLinkedInPublisher
 from app.services.publishing.executor import run_publish_pipeline
-from tests.conftest import seed_user_session_and_connection
+from tests.conftest import seed_user_session_and_connection, stamp_publish_approval
 
 pytestmark = pytest.mark.integration
 
@@ -64,6 +64,7 @@ async def test_real_provider_success_persists_on_postgres(
             created_at=now,
             updated_at=now,
         )
+        stamp_publish_approval(post, approved_by=user.id, clock=now)
         session.add(post)
         await session.commit()
         post_id = post.id
@@ -134,6 +135,7 @@ async def test_concurrent_workers_single_real_api_call(
             created_at=now,
             updated_at=now,
         )
+        stamp_publish_approval(post, approved_by=user.id, clock=now)
         session.add(post)
         await session.commit()
         post_id = post.id

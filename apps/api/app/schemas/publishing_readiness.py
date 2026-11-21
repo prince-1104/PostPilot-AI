@@ -32,6 +32,7 @@ class PublishingReadinessResponse(BaseModel):
 
     selected_post_id: UUID | None = None
     selected_post_canary_approved: bool | None = None
+    selected_post_db_approved: bool | None = None
     selected_post_status: str | None = None
 
     pending_scheduled_posts: int = 0

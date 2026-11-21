@@ -13,6 +13,8 @@ class CreateScheduledPost(BaseModel):
     scheduled_at: datetime
     timezone: str = Field(min_length=1, max_length=64)
     linkedin_connection_id: UUID
+    # Explicit Schedule & Publish confirmation from the authenticated UI.
+    confirm_publish: bool
 
     @field_validator("content")
     @classmethod
@@ -34,6 +36,13 @@ class CreateScheduledPost(BaseModel):
     def _strip_timezone(cls, value: str) -> str:
         return value.strip()
 
+    @field_validator("confirm_publish")
+    @classmethod
+    def _require_confirm(cls, value: bool) -> bool:
+        if value is not True:
+            raise ValueError("confirm_publish must be true to schedule for LinkedIn publishing")
+        return value
+
 
 class UpdateScheduledPost(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -42,6 +51,8 @@ class UpdateScheduledPost(BaseModel):
     content: str | None = Field(default=None, min_length=1)
     scheduled_at: datetime | None = None
     timezone: str | None = Field(default=None, min_length=1, max_length=64)
+    # Required true when content/schedule/timezone change (renews approval).
+    confirm_publish: bool | None = None
 
     @field_validator("content")
     @classmethod
@@ -76,6 +87,22 @@ class CancelScheduledPost(BaseModel):
     expected_version: int = Field(ge=1)
 
 
+class ApproveScheduledPost(BaseModel):
+    """Explicitly approve an existing scheduled post for LinkedIn publication."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1)
+    confirm_publish: bool
+
+    @field_validator("confirm_publish")
+    @classmethod
+    def _require_confirm(cls, value: bool) -> bool:
+        if value is not True:
+            raise ValueError("confirm_publish must be true to approve publishing")
+        return value
+
+
 class ScheduledPostResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -101,6 +128,10 @@ class ScheduledPostResponse(BaseModel):
     connection_expires_before_schedule: bool = False
     connection_expiry_warning: str | None = None
     reconnect_required: bool = False
+    publish_approved: bool = False
+    publish_approved_at: datetime | None = None
+    publish_approved_by: UUID | None = None
+    approval_revoked_at: datetime | None = None
 
 
 class ScheduledPostListResponse(BaseModel):

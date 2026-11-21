@@ -93,14 +93,27 @@ republishing.
 | `fake` (default) | — | Deterministic simulation; never calls LinkedIn |
 | `linkedin` | `ENABLE_REAL_PUBLISHING=true` | `POST /rest/posts` with decrypted member token |
 
-### Live canary (Phase 4C)
+### Database publishing approval
+
+When `PUBLISH_PROVIDER=linkedin`, every post must carry durable approval:
+
+- `publish_approved_at` / `publish_approved_by` (session user)
+- `approved_content_hash` covering content + schedule + timezone + connection
+- `approval_revoked_at` null
+
+UI `confirm_publish=true` on create/update/approve stamps approval. Historical rows
+remain unapproved. Editing material fields without confirmation is rejected; cancel
+revokes approval. Fake provider mode skips the DB approval gate for isolated tests.
+
+### Live canary (temporary operator gate)
 
 When `PUBLISH_PROVIDER=linkedin` and `LIVE_PUBLISH_REQUIRE_CANARY=true` (default):
 
 - Dispatcher leases **only** IDs listed in `LIVE_PUBLISH_CANARY_POST_IDS`.
 - An empty allowlist means **zero** real dispatches.
-- The worker blocks unapproved IDs before claim / before HTTP and leaves them `scheduled`
-  (deferred), never `published` or `failed` solely due to the canary.
+- Canary never bypasses database approval.
+- The worker blocks unauthorized IDs before claim / before HTTP and leaves them
+  `scheduled` (deferred).
 - Fake provider mode ignores the canary gate.
 
 See [live-e2e-publishing.md](live-e2e-publishing.md).
