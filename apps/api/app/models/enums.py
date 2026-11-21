@@ -53,11 +53,20 @@ class AgentMessageRole(StrEnum):
 
 
 class AgentDraftStatus(StrEnum):
-    """Draft is never auto-scheduled or published in Phase 5A."""
+    """Draft lifecycle. Scheduling always goes through PostService (Phase 5C)."""
 
     DRAFT = "draft"
     SUPERSEDED = "superseded"
     DISCARDED = "discarded"
+    SCHEDULED = "scheduled"
+
+
+class AgentDraftScheduleOpState(StrEnum):
+    """Idempotent draft→PostService confirmation operation."""
+
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+    FAILED = "failed"
 
 
 class AssistantResponseState(StrEnum):

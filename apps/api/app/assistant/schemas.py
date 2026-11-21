@@ -1,11 +1,19 @@
-"""Structured LLM I/O and graph-facing Pydantic models for Phase 5A/5B."""
+"""Structured LLM I/O and graph-facing Pydantic models for Phase 5A/5B.
+
+OpenAI strict structured outputs require:
+- every property listed in ``required``
+- no free-form ``dict`` / ``additionalProperties`` objects
+
+Fact maps therefore use ``[{key, value}, ...]`` for LLM I/O and convert to
+``dict[str, str]`` at the graph boundary.
+"""
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 PostCategory = Literal[
     "job_announcement",
@@ -45,41 +53,150 @@ AssistantStage = Literal[
 ]
 
 
+class FactEntry(BaseModel):
+    """OpenAI-safe key/value fact (replaces free-form dicts in structured output)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    value: str
+
+
+def facts_to_dict(entries: list[FactEntry] | dict[str, str] | None) -> dict[str, str]:
+    if not entries:
+        return {}
+    if isinstance(entries, dict):
+        return {str(k): str(v) for k, v in entries.items() if str(k).strip() and str(v).strip()}
+    out: dict[str, str] = {}
+    for item in entries:
+        key = item.key.strip()
+        value = item.value.strip()
+        if key and value:
+            out[key] = value
+    return out
+
+
+def dict_to_facts(data: dict[str, str] | None) -> list[FactEntry]:
+    if not data:
+        return []
+    return [FactEntry(key=str(k), value=str(v)) for k, v in data.items() if str(k) and str(v)]
+
+
+def _coerce_fact_entries(value: Any) -> list[dict[str, str]] | Any:
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        return [{"key": str(k), "value": str(v)} for k, v in value.items()]
+    return value
+
+
 class IntentResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     intent_type: IntentType
-    post_category: PostCategory = "general"
-    extracted_facts: dict[str, str] = Field(default_factory=dict)
-    requested_schedule_text: str | None = None
-    missing_hints: list[str] = Field(default_factory=list)
-    injection_attempt: bool = False
-    writing_style: WritingStyle | None = None
-    refine_instruction: str | None = None
-    notes: str | None = None
+    post_category: PostCategory
+    extracted_facts: list[FactEntry]
+    requested_schedule_text: str | None
+    missing_hints: list[str]
+    injection_attempt: bool
+    writing_style: WritingStyle | None
+    refine_instruction: str | None
+    notes: str | None
+
+    @field_validator("extracted_facts", mode="before")
+    @classmethod
+    def _facts(cls, value: Any) -> Any:
+        return _coerce_fact_entries(value)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _defaults_for_fake(cls, value: Any) -> Any:
+        # Keep FakeLLM compact overrides working while satisfying OpenAI required fields.
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        data.setdefault("post_category", "general")
+        data.setdefault("extracted_facts", [])
+        data.setdefault("requested_schedule_text", None)
+        data.setdefault("missing_hints", [])
+        data.setdefault("injection_attempt", False)
+        data.setdefault("writing_style", None)
+        data.setdefault("refine_instruction", None)
+        data.setdefault("notes", None)
+        return data
+
+    @property
+    def extracted_facts_map(self) -> dict[str, str]:
+        return facts_to_dict(self.extracted_facts)
 
 
 class RequirementsResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    confirmed_facts: dict[str, str] = Field(default_factory=dict)
-    optional_preferences: dict[str, str] = Field(default_factory=dict)
-    missing_required_fields: list[str] = Field(default_factory=list)
-    clarification_questions: list[str] = Field(default_factory=list)
-    ready_to_draft: bool = False
+    confirmed_facts: list[FactEntry]
+    optional_preferences: list[FactEntry]
+    missing_required_fields: list[str]
+    clarification_questions: list[str]
+    ready_to_draft: bool
+
+    @field_validator("confirmed_facts", "optional_preferences", mode="before")
+    @classmethod
+    def _facts(cls, value: Any) -> Any:
+        return _coerce_fact_entries(value)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _defaults_for_fake(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        data.setdefault("confirmed_facts", [])
+        data.setdefault("optional_preferences", [])
+        data.setdefault("missing_required_fields", [])
+        data.setdefault("clarification_questions", [])
+        data.setdefault("ready_to_draft", False)
+        return data
+
+    @property
+    def confirmed_facts_map(self) -> dict[str, str]:
+        return facts_to_dict(self.confirmed_facts)
+
+    @property
+    def optional_preferences_map(self) -> dict[str, str]:
+        return facts_to_dict(self.optional_preferences)
 
 
 class WritingResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     content: str = Field(min_length=1, max_length=3000)
-    suggested_hashtags: list[str] = Field(default_factory=list)
-    confirmed_facts_used: dict[str, str] = Field(default_factory=dict)
-    assumptions: list[str] = Field(default_factory=list)
-    missing_information: list[str] = Field(default_factory=list)
-    quality_warnings: list[str] = Field(default_factory=list)
-    suggested_skills: list[str] = Field(default_factory=list)
-    suggested_responsibilities: list[str] = Field(default_factory=list)
+    suggested_hashtags: list[str]
+    confirmed_facts_used: list[FactEntry]
+    assumptions: list[str]
+    missing_information: list[str]
+    quality_warnings: list[str]
+    suggested_skills: list[str]
+    suggested_responsibilities: list[str]
+
+    @field_validator("confirmed_facts_used", mode="before")
+    @classmethod
+    def _facts(cls, value: Any) -> Any:
+        return _coerce_fact_entries(value)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _defaults_for_fake(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        data.setdefault("suggested_hashtags", [])
+        data.setdefault("confirmed_facts_used", [])
+        data.setdefault("assumptions", [])
+        data.setdefault("missing_information", [])
+        data.setdefault("quality_warnings", [])
+        data.setdefault("suggested_skills", [])
+        data.setdefault("suggested_responsibilities", [])
+        return data
 
     @field_validator("suggested_hashtags")
     @classmethod
@@ -99,6 +216,10 @@ class WritingResult(BaseModel):
     def _trim_suggestions(cls, value: list[str]) -> list[str]:
         return [item.strip()[:200] for item in value if item and item.strip()][:12]
 
+    @property
+    def confirmed_facts_used_map(self) -> dict[str, str]:
+        return facts_to_dict(self.confirmed_facts_used)
+
 
 class ReviewResult(BaseModel):
     """Advisory LLM review — never treated as ground-truth verification."""
@@ -106,11 +227,24 @@ class ReviewResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     passed: bool
-    issues: list[str] = Field(default_factory=list)
-    suggestions: list[str] = Field(default_factory=list)
-    unsupported_claims: list[str] = Field(default_factory=list)
-    missing_required_facts: list[str] = Field(default_factory=list)
-    proposed_revision: str | None = None
+    issues: list[str]
+    suggestions: list[str]
+    unsupported_claims: list[str]
+    missing_required_facts: list[str]
+    proposed_revision: str | None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _defaults_for_fake(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        data.setdefault("issues", [])
+        data.setdefault("suggestions", [])
+        data.setdefault("unsupported_claims", [])
+        data.setdefault("missing_required_facts", [])
+        data.setdefault("proposed_revision", None)
+        return data
 
 
 class GraphSnapshot(BaseModel):

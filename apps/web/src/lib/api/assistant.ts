@@ -5,6 +5,7 @@ import {
   isRecord,
   UnexpectedResponseError,
 } from "@/lib/api/client";
+import { parseScheduledPost, type ScheduledPost } from "@/lib/api/posts";
 
 export type AssistantState =
   | "needs_information"
@@ -46,9 +47,36 @@ export interface AssistantDraft {
   timezone: string | null;
   status: string;
   version: number;
+  scheduledPostId: string | null;
   label: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AssistantSchedulePreview {
+  draftId: string;
+  draftVersion: number;
+  content: string;
+  linkedinConnectionId: string;
+  linkedinDisplayName: string | null;
+  scheduledAtLocal: string;
+  timezone: string;
+  scheduledAtUtc: string;
+  approvalWarnings: string[];
+  advisoryWarnings: string[];
+  hardBlockers: string[];
+  connectionExpiryWarning: string | null;
+  canConfirm: boolean;
+  label: string;
+}
+
+export interface AssistantScheduleConfirm {
+  draftId: string;
+  draftVersion: number;
+  scheduledPostId: string;
+  post: ScheduledPost;
+  idempotentReplay: boolean;
+  message: string;
 }
 
 export interface AssistantThreadSummary {
@@ -136,9 +164,30 @@ function parseDraft(payload: unknown): AssistantDraft | null {
     timezone: optionalString(payload.timezone),
     status: requireString(payload.status, "status"),
     version: typeof payload.version === "number" ? payload.version : 1,
+    scheduledPostId: optionalString(payload.scheduled_post_id),
     label: optionalString(payload.label) ?? "Draft — not scheduled",
     createdAt: requireString(payload.created_at, "created_at"),
     updatedAt: requireString(payload.updated_at, "updated_at"),
+  };
+}
+
+function parseSchedulePreview(payload: unknown): AssistantSchedulePreview {
+  if (!isRecord(payload)) throw new UnexpectedResponseError("Invalid schedule preview.");
+  return {
+    draftId: requireString(payload.draft_id, "draft_id"),
+    draftVersion: typeof payload.draft_version === "number" ? payload.draft_version : 1,
+    content: requireString(payload.content, "content"),
+    linkedinConnectionId: requireString(payload.linkedin_connection_id, "linkedin_connection_id"),
+    linkedinDisplayName: optionalString(payload.linkedin_display_name),
+    scheduledAtLocal: requireString(payload.scheduled_at_local, "scheduled_at_local"),
+    timezone: requireString(payload.timezone, "timezone"),
+    scheduledAtUtc: requireString(payload.scheduled_at_utc, "scheduled_at_utc"),
+    approvalWarnings: stringList(payload.approval_warnings),
+    advisoryWarnings: stringList(payload.advisory_warnings),
+    hardBlockers: stringList(payload.hard_blockers),
+    connectionExpiryWarning: optionalString(payload.connection_expiry_warning),
+    canConfirm: Boolean(payload.can_confirm),
+    label: optionalString(payload.label) ?? "Draft — not scheduled",
   };
 }
 
@@ -305,4 +354,71 @@ export async function runAssistantDraftAction(
       client_message_id: body.clientMessageId,
     },
   });
+}
+
+export async function previewAssistantSchedule(
+  draftId: string,
+  body: {
+    expectedDraftVersion: number;
+    content?: string;
+    linkedinConnectionId: string;
+    scheduledAt: string;
+    timezone: string;
+    acknowledgeWarnings?: boolean;
+  },
+  signal?: AbortSignal,
+): Promise<AssistantSchedulePreview> {
+  return apiPostJson(`/api/v1/assistant/drafts/${draftId}/schedule-preview`, parseSchedulePreview, {
+    signal,
+    body: {
+      expected_draft_version: body.expectedDraftVersion,
+      content: body.content,
+      linkedin_connection_id: body.linkedinConnectionId,
+      scheduled_at: body.scheduledAt,
+      timezone: body.timezone,
+      acknowledge_warnings: body.acknowledgeWarnings ?? false,
+    },
+  });
+}
+
+export async function confirmAssistantSchedule(
+  draftId: string,
+  body: {
+    expectedDraftVersion: number;
+    content: string;
+    linkedinConnectionId: string;
+    scheduledAt: string;
+    timezone: string;
+    acknowledgeWarnings?: boolean;
+  },
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<AssistantScheduleConfirm> {
+  return apiPostJson(
+    `/api/v1/assistant/drafts/${draftId}/schedule`,
+    (payload: unknown) => {
+      if (!isRecord(payload)) throw new UnexpectedResponseError("Invalid schedule confirm.");
+      return {
+        draftId: requireString(payload.draft_id, "draft_id"),
+        draftVersion: typeof payload.draft_version === "number" ? payload.draft_version : 1,
+        scheduledPostId: requireString(payload.scheduled_post_id, "scheduled_post_id"),
+        post: parseScheduledPost(payload.post),
+        idempotentReplay: Boolean(payload.idempotent_replay),
+        message: optionalString(payload.message) ?? "Scheduled.",
+      };
+    },
+    {
+      signal,
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: {
+        expected_draft_version: body.expectedDraftVersion,
+        content: body.content,
+        linkedin_connection_id: body.linkedinConnectionId,
+        scheduled_at: body.scheduledAt,
+        timezone: body.timezone,
+        confirm_schedule: true,
+        acknowledge_warnings: body.acknowledgeWarnings ?? false,
+      },
+    },
+  );
 }

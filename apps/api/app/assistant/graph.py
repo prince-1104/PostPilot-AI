@@ -235,7 +235,7 @@ def build_assistant_graph(llm: LLMProvider, settings: Settings, *, entry: str = 
             schema=IntentResult,
         )
         facts = dict(state.get("confirmed_facts") or {})
-        facts.update({k: v for k, v in result.extracted_facts.items() if v})
+        facts.update(result.extracted_facts_map)
         style: WritingStyle = result.writing_style or state.get("writing_style") or "professional"  # type: ignore[assignment]
         # Preserve an established category on follow-ups that classify as "general".
         post_category = result.post_category
@@ -339,8 +339,8 @@ def build_assistant_graph(llm: LLMProvider, settings: Settings, *, entry: str = 
             response_state = "needs_information"
 
         return {
-            "confirmed_facts": result.confirmed_facts,
-            "optional_preferences": result.optional_preferences,
+            "confirmed_facts": result.confirmed_facts_map,
+            "optional_preferences": result.optional_preferences_map,
             "missing_required_fields": missing,
             "clarification_questions": questions[:3],
             "proposed_scheduled_at": proposed_iso,
@@ -367,7 +367,7 @@ def build_assistant_graph(llm: LLMProvider, settings: Settings, *, entry: str = 
         )
         # Never let model-suggested skills become confirmed facts.
         confirmed = dict(state.get("confirmed_facts") or {})
-        for key, value in result.confirmed_facts_used.items():
+        for key, value in result.confirmed_facts_used_map.items():
             if key.startswith("suggested_"):
                 continue
             if key in confirmed or key in (state.get("optional_preferences") or {}):

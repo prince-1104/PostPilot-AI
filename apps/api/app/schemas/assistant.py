@@ -1,10 +1,12 @@
-"""HTTP schemas for the Phase 5A/5B AI assistant."""
+"""HTTP schemas for the Phase 5A/5B/5C AI assistant."""
 
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.schemas.posts import ScheduledPostResponse
 
 AssistantState = Literal[
     "needs_information",
@@ -105,9 +107,112 @@ class AssistantDraftResponse(BaseModel):
     timezone: str | None
     status: str
     version: int
+    scheduled_post_id: UUID | None = None
     label: str = "Draft — not scheduled"
     created_at: datetime
     updated_at: datetime
+
+
+class AssistantSchedulePreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_draft_version: int = Field(ge=1)
+    content: str | None = Field(default=None, min_length=1, max_length=3000)
+    linkedin_connection_id: UUID
+    scheduled_at: datetime
+    timezone: str = Field(min_length=1, max_length=64)
+    acknowledge_warnings: bool = False
+
+    @field_validator("content")
+    @classmethod
+    def _strip_content(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("content must not be blank")
+        return stripped
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def _require_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("scheduled_at must be timezone-aware (include an offset)")
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def _strip_timezone(cls, value: str) -> str:
+        return value.strip()
+
+
+class AssistantScheduleConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_draft_version: int = Field(ge=1)
+    content: str = Field(min_length=1, max_length=3000)
+    linkedin_connection_id: UUID
+    scheduled_at: datetime
+    timezone: str = Field(min_length=1, max_length=64)
+    confirm_schedule: bool
+    acknowledge_warnings: bool = False
+
+    @field_validator("content")
+    @classmethod
+    def _strip_content(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("content must not be blank")
+        return stripped
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def _require_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("scheduled_at must be timezone-aware (include an offset)")
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def _strip_timezone(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("confirm_schedule")
+    @classmethod
+    def _require_confirm(cls, value: bool) -> bool:
+        if value is not True:
+            raise ValueError("confirm_schedule must be true to create a scheduled post")
+        return value
+
+
+class AssistantSchedulePreviewResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    draft_id: UUID
+    draft_version: int
+    content: str
+    linkedin_connection_id: UUID
+    linkedin_display_name: str | None
+    scheduled_at_local: str
+    timezone: str
+    scheduled_at_utc: datetime
+    approval_warnings: list[str] = Field(default_factory=list)
+    advisory_warnings: list[str] = Field(default_factory=list)
+    hard_blockers: list[str] = Field(default_factory=list)
+    connection_expiry_warning: str | None = None
+    can_confirm: bool
+    label: str = "Draft — not scheduled"
+
+
+class AssistantScheduleConfirmResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    draft_id: UUID
+    draft_version: int
+    scheduled_post_id: UUID
+    post: ScheduledPostResponse
+    idempotent_replay: bool = False
+    message: str = "Scheduled via existing PostService. Celery will publish when due."
 
 
 class AssistantThreadSummary(BaseModel):

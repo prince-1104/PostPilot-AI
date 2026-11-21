@@ -365,8 +365,10 @@ class AssistantService:
                 "Thread was updated elsewhere. Refresh and try again."
             )
 
-        # Manual edit: supersede prior draft row with a new version (optimistic concurrency).
-        draft.status = AgentDraftStatus.SUPERSEDED.value
+        # Manual edit: new version. Scheduled rows keep their post link; edits never
+        # mutate ScheduledPost content (use PostService.update for that).
+        if draft.status != AgentDraftStatus.SCHEDULED.value:
+            draft.status = AgentDraftStatus.SUPERSEDED.value
         now = datetime.now(UTC)
         new_draft = AgentDraft(
             id=uuid4(),
@@ -382,6 +384,7 @@ class AssistantService:
             timezone=draft.timezone,
             status=AgentDraftStatus.DRAFT.value,
             version=draft.version + 1,
+            scheduled_post_id=None,
             created_at=now,
             updated_at=now,
         )
@@ -623,12 +626,21 @@ class AssistantService:
 
     @staticmethod
     def _latest_draft(thread: AgentThread) -> AgentDraft | None:
-        active = [
+        # Prefer an editable draft; otherwise surface the latest scheduled version.
+        editable = [
             d for d in thread.drafts if d.status == AgentDraftStatus.DRAFT.value
         ]
-        if not active:
+        if editable:
+            return max(editable, key=lambda d: d.version)
+        visible = [
+            d
+            for d in thread.drafts
+            if d.status
+            in {AgentDraftStatus.DRAFT.value, AgentDraftStatus.SCHEDULED.value}
+        ]
+        if not visible:
             return None
-        return max(active, key=lambda d: d.version)
+        return max(visible, key=lambda d: d.version)
 
     @staticmethod
     def _message_response(message: AgentMessage) -> AssistantMessageResponse:
@@ -641,6 +653,7 @@ class AssistantService:
 
     @staticmethod
     def _draft_response(draft: AgentDraft) -> AssistantDraftResponse:
+        scheduled = draft.scheduled_post_id is not None
         return AssistantDraftResponse(
             id=draft.id,
             content=draft.content,
@@ -652,6 +665,8 @@ class AssistantService:
             timezone=draft.timezone,
             status=draft.status,
             version=draft.version,
+            scheduled_post_id=draft.scheduled_post_id,
+            label="Scheduled" if scheduled else "Draft — not scheduled",
             created_at=draft.created_at,
             updated_at=draft.updated_at,
         )

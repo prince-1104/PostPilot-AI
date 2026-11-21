@@ -93,10 +93,17 @@ class OpenAILLMProvider(LLMProvider):
         except APIConnectionError:
             raise
         except APIStatusError as exc:
+            body = getattr(exc, "body", None)
+            detail = None
+            if isinstance(body, dict):
+                err = body.get("error")
+                if isinstance(err, dict):
+                    detail = err.get("message")
             logger.warning(
                 "assistant.llm.provider_status",
                 status=exc.status_code,
                 provider="openai",
+                detail=(str(detail)[:180] if detail else None),
             )
             raise LLMError(
                 "The AI provider returned an error.",

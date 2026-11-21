@@ -3,9 +3,10 @@
 Import every model here so Alembic and metadata consumers see the full schema.
 """
 
-from app.models.agent_thread import AgentDraft, AgentMessage, AgentThread
+from app.models.agent_thread import AgentDraft, AgentDraftScheduleOp, AgentMessage, AgentThread
 from app.models.auth_session import AuthSession
 from app.models.enums import (
+    AgentDraftScheduleOpState,
     AgentDraftStatus,
     AgentMessageRole,
     AgentThreadStatus,
@@ -22,6 +23,8 @@ from app.models.user import User
 
 __all__ = [
     "AgentDraft",
+    "AgentDraftScheduleOp",
+    "AgentDraftScheduleOpState",
     "AgentDraftStatus",
     "AgentMessage",
     "AgentMessageRole",

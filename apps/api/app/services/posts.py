@@ -389,6 +389,37 @@ class PostService:
         logger.info("posts.cancelled", post_id=str(updated.id), user_id=str(user.id))
         return self._to_response(updated, connection=connection, clock=clock)
 
+    async def validate_schedule_inputs(
+        self,
+        *,
+        user: User,
+        content: str,
+        scheduled_at: datetime,
+        timezone: str,
+        linkedin_connection_id: UUID,
+        now: datetime | None = None,
+    ) -> tuple[LinkedInConnection, list[str]]:
+        """Read-only create validation used by assistant schedule preview (no inserts)."""
+        clock = now or datetime.now(UTC)
+        self._validate_content(content)
+        require_iana_timezone(timezone)
+        assert_offset_matches_timezone(scheduled_at, timezone)
+        self._validate_schedule_lead(scheduled_at, clock=clock)
+        connection = await self._require_schedulable_connection(
+            user=user, connection_id=linkedin_connection_id
+        )
+        warnings: list[str] = []
+        if connection.token_expires_at is not None:
+            token_exp = connection.token_expires_at
+            if token_exp.tzinfo is None:
+                token_exp = token_exp.replace(tzinfo=UTC)
+            if token_exp < scheduled_at.astimezone(UTC):
+                warnings.append(
+                    "The LinkedIn access token expires before this post is scheduled to publish. "
+                    "Reconnect LinkedIn before the scheduled time."
+                )
+        return connection, warnings
+
     def _validate_content(self, content: str) -> None:
         max_len = self._settings.post_content_max_length
         if len(content) > max_len:

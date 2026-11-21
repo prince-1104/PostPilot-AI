@@ -1,24 +1,34 @@
 "use client";
 
 import { Copy, MessageCircle, RefreshCw, X } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api/client";
 import {
+  confirmAssistantSchedule,
   createAssistantThread,
   getAssistantStatus,
   getAssistantThread,
   listAssistantThreads,
   patchAssistantDraft,
   postAssistantMessage,
+  previewAssistantSchedule,
   runAssistantDraftAction,
   type AssistantDraft,
   type AssistantMessage,
+  type AssistantSchedulePreview,
   type AssistantStatus,
   type WritingStyle,
 } from "@/lib/api/assistant";
-import { guessBrowserTimezone } from "@/lib/timezone";
+import { getLinkedInConnection } from "@/lib/api/connections";
+import { getPost, newIdempotencyKey, type ScheduledPost } from "@/lib/api/posts";
+import {
+  guessBrowserTimezone,
+  instantToWallLocalInput,
+  wallTimeToOffsetAwareIso,
+} from "@/lib/timezone";
 
 const TONES: WritingStyle[] = [
   "professional",
@@ -68,8 +78,16 @@ export function AssistantWidget() {
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [lockVersion, setLockVersion] = useState(0);
   const [copied, setCopied] = useState(false);
+  const [connectionId, setConnectionId] = useState<string | null>(null);
+  const [connectionLabel, setConnectionLabel] = useState<string | null>(null);
+  const [scheduleLocal, setScheduleLocal] = useState("");
+  const [ackWarnings, setAckWarnings] = useState(false);
+  const [preview, setPreview] = useState<AssistantSchedulePreview | null>(null);
+  const [scheduledPost, setScheduledPost] = useState<ScheduledPost | null>(null);
+  const [scheduleIdempotencyKey, setScheduleIdempotencyKey] = useState(() => newIdempotencyKey());
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const hydratedRef = useRef(false);
+  const pollRef = useRef<number | null>(null);
 
   const timezone = guessBrowserTimezone();
 
@@ -124,7 +142,42 @@ export function AssistantWidget() {
   useEffect(() => {
     if (!open) return;
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, draft, open, stage]);
+  }, [messages, draft, open, stage, preview, scheduledPost]);
+
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    void getLinkedInConnection(controller.signal)
+      .then((conn) => {
+        if (controller.signal.aborted) return;
+        setConnectionId(conn.id);
+        setConnectionLabel(conn.displayName ?? conn.personUrn ?? "LinkedIn account");
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setConnectionId(null);
+      });
+    return () => controller.abort();
+  }, [open]);
+
+  useEffect(() => {
+    if (!scheduledPost?.id) return;
+    const terminal = new Set(["published", "failed", "cancelled", "requires_review"]);
+    if (terminal.has(scheduledPost.status)) return;
+
+    const tick = () => {
+      void getPost(scheduledPost.id)
+        .then((next) => setScheduledPost(next))
+        .catch(() => undefined);
+    };
+    pollRef.current = window.setInterval(tick, 4000);
+    return () => {
+      if (pollRef.current !== null) {
+        window.clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [scheduledPost?.id, scheduledPost?.status]);
 
   function applyThread(detail: {
     id: string;
@@ -149,6 +202,16 @@ export function AssistantWidget() {
     setReviewSuggestions(detail.reviewSuggestions);
     setValidationErrors(detail.validationErrors);
     setLockVersion(detail.lockVersion);
+    if (detail.draft?.proposedScheduledAt && detail.draft.timezone) {
+      setScheduleLocal(
+        instantToWallLocalInput(detail.draft.proposedScheduledAt, detail.draft.timezone),
+      );
+    }
+    if (detail.draft?.scheduledPostId) {
+      void getPost(detail.draft.scheduledPostId)
+        .then((post) => setScheduledPost(post))
+        .catch(() => undefined);
+    }
   }
 
   function applyTurn(turn: {
@@ -172,6 +235,11 @@ export function AssistantWidget() {
     setReviewSuggestions(turn.reviewSuggestions);
     setValidationErrors(turn.validationErrors);
     setLockVersion(turn.lockVersion);
+    if (turn.draft?.proposedScheduledAt && turn.draft.timezone) {
+      setScheduleLocal(
+        instantToWallLocalInput(turn.draft.proposedScheduledAt, turn.draft.timezone),
+      );
+    }
     if (turn.state === "unavailable" || turn.state === "error") {
       setError(turn.assistantMessage?.content ?? "Assistant turn failed.");
     }
@@ -294,6 +362,74 @@ export function AssistantWidget() {
       window.setTimeout(() => setCopied(false), 1500);
     } catch {
       setError("Could not copy draft to clipboard.");
+    }
+  }
+
+  async function handleSchedulePreview() {
+    if (!draft || !connectionId || !scheduleLocal || busy) return;
+    setBusy(true);
+    setError(null);
+    setPreview(null);
+    try {
+      const scheduledAt = wallTimeToOffsetAwareIso(scheduleLocal, timezone);
+      const next = await previewAssistantSchedule(draft.id, {
+        expectedDraftVersion: draft.version,
+        content: draftText.trim(),
+        linkedinConnectionId: connectionId,
+        scheduledAt,
+        timezone,
+        acknowledgeWarnings: ackWarnings,
+      });
+      setPreview(next);
+      if (!next.canConfirm && next.hardBlockers.length > 0) {
+        setError(next.hardBlockers[0] ?? "Cannot schedule this draft yet.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Schedule preview failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleApproveAndSchedule() {
+    if (!draft || !connectionId || !scheduleLocal || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const scheduledAt = wallTimeToOffsetAwareIso(scheduleLocal, timezone);
+      const result = await confirmAssistantSchedule(
+        draft.id,
+        {
+          expectedDraftVersion: draft.version,
+          content: draftText.trim(),
+          linkedinConnectionId: connectionId,
+          scheduledAt,
+          timezone,
+          acknowledgeWarnings: ackWarnings,
+        },
+        scheduleIdempotencyKey,
+      );
+      setScheduledPost(result.post);
+      setDraft({
+        ...draft,
+        scheduledPostId: result.scheduledPostId,
+        status: "scheduled",
+        label: "Scheduled",
+      });
+      setPreview(null);
+      setScheduleIdempotencyKey(newIdempotencyKey());
+      if (threadId) {
+        const refreshed = await getAssistantThread(threadId);
+        setMessages(refreshed.messages);
+        if (refreshed.draft) {
+          setDraft(refreshed.draft);
+          setDraftText(refreshed.draft.content);
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not approve and schedule.");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -491,6 +627,112 @@ export function AssistantWidget() {
                     Save edits
                   </Button>
                 </div>
+
+                {draft.scheduledPostId ? (
+                  <div className="mt-3 rounded-md border border-border bg-background px-3 py-2 text-sm">
+                    <p className="font-medium">Linked scheduled post</p>
+                    <p className="text-xs text-muted-foreground">{draft.scheduledPostId}</p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="mt-2"
+                      render={<Link href={`/posts/${draft.scheduledPostId}`} />}
+                    >
+                      View scheduled post
+                    </Button>
+                    {scheduledPost ? (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Status: {scheduledPost.status}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="mt-3 space-y-2 rounded-md border border-dashed border-border p-3">
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Approve &amp; Schedule
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Chat messages never schedule. Confirm destination and time explicitly.
+                    </p>
+                    <label className="block text-xs text-muted-foreground">
+                      LinkedIn account
+                      <input
+                        className="mt-1 w-full rounded-md border border-input bg-background px-2 py-1 text-sm"
+                        value={connectionLabel ?? (connectionId ? connectionId : "Not connected")}
+                        readOnly
+                        aria-readonly
+                      />
+                    </label>
+                    <label className="block text-xs text-muted-foreground">
+                      Schedule (local wall time)
+                      <input
+                        type="datetime-local"
+                        className="mt-1 w-full rounded-md border border-input bg-background px-2 py-1 text-sm"
+                        value={scheduleLocal}
+                        disabled={busy}
+                        onChange={(event) => setScheduleLocal(event.target.value)}
+                      />
+                    </label>
+                    <p className="text-xs text-muted-foreground">Timezone: {timezone}</p>
+                    {(reviewIssues.length > 0 || (preview?.advisoryWarnings.length ?? 0) > 0) && (
+                      <label className="flex items-start gap-2 text-xs text-muted-foreground">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5"
+                          checked={ackWarnings}
+                          disabled={busy}
+                          onChange={(event) => setAckWarnings(event.target.checked)}
+                        />
+                        I reviewed advisory warnings and want to proceed.
+                      </label>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={busy || !connectionId || !scheduleLocal}
+                        onClick={() => void handleSchedulePreview()}
+                      >
+                        Preview schedule
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={busy || !preview?.canConfirm || !connectionId}
+                        onClick={() => void handleApproveAndSchedule()}
+                      >
+                        Approve &amp; Schedule
+                      </Button>
+                    </div>
+                    {preview ? (
+                      <div className="rounded-md bg-muted/40 px-2 py-2 text-xs">
+                        <p>
+                          <span className="font-medium">When: </span>
+                          {preview.scheduledAtLocal} ({preview.timezone})
+                        </p>
+                        <p>
+                          <span className="font-medium">UTC: </span>
+                          {preview.scheduledAtUtc}
+                        </p>
+                        {preview.hardBlockers.length > 0 ? (
+                          <ul className="mt-1 list-disc pl-4 text-destructive">
+                            {preview.hardBlockers.map((item) => (
+                              <li key={item}>{item}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        {preview.advisoryWarnings.length > 0 ? (
+                          <ul className="mt-1 list-disc pl-4 text-muted-foreground">
+                            {preview.advisoryWarnings.map((item) => (
+                              <li key={item}>{item}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
               </div>
             ) : null}
 

@@ -135,7 +135,17 @@ AI_LLM_MAX_RETRIES=1
 - `PATCH /assistant/threads/{id}/draft` — manual edit with optimistic concurrency
 - `POST /assistant/threads/{id}/draft/actions` — `regenerate` | `rewrite` | `set_tone`
 
-## Future (Phase 5C)
+## Phase 5C — schedule confirmation
 
-Wire “Use this draft” → `PostService.create` with explicit user confirmation, idempotency,
-and existing LinkedIn publishing approval. Still no autonomous publish from the graph.
+Chat / LangGraph nodes **never** call `PostService`.
+
+Explicit UI + API flow:
+
+1. `POST /api/v1/assistant/drafts/{id}/schedule-preview` — read-only validation
+2. User reviews content, LinkedIn account, local time, timezone, warnings
+3. `POST /api/v1/assistant/drafts/{id}/schedule` with `confirm_schedule=true` + `Idempotency-Key`
+4. Backend calls existing `PostService.create(..., confirm_publish=True)`
+5. `agent_draft_schedule_ops` links draft version → `scheduled_posts.id`
+
+Natural-language “publish immediately” cannot bypass confirmation.
+Editing an AI draft after scheduling creates a new draft version and does not mutate the post.

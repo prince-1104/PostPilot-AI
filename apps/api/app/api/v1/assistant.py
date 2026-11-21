@@ -1,13 +1,23 @@
-"""Authenticated AI assistant routes (Phase 5A/5B — drafting only)."""
+"""Authenticated AI assistant routes (Phase 5A-5C).
 
+Scheduling confirmation is a separate authenticated endpoint that calls PostService.
+Chat/message endpoints never create scheduled_posts.
+"""
+
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 
 from app.api.deps import CurrentUserDep, RequireOriginDep, SessionDep, SettingsDep
+from app.core.errors import UnprocessableError
 from app.schemas.assistant import (
     AssistantDraftAction,
     AssistantDraftResponse,
+    AssistantScheduleConfirmRequest,
+    AssistantScheduleConfirmResponse,
+    AssistantSchedulePreviewRequest,
+    AssistantSchedulePreviewResponse,
     AssistantStatusResponse,
     AssistantThreadDetail,
     AssistantThreadSummary,
@@ -17,6 +27,7 @@ from app.schemas.assistant import (
     PostAssistantMessage,
 )
 from app.services.assistant import AssistantService
+from app.services.assistant_schedule import DraftScheduleService
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
 
@@ -122,4 +133,45 @@ async def draft_action(
 ) -> AssistantTurnResponse:
     return await AssistantService(session, settings=settings).apply_draft_action(
         user=user, thread_id=thread_id, payload=body
+    )
+
+
+@router.post(
+    "/drafts/{draft_id}/schedule-preview",
+    response_model=AssistantSchedulePreviewResponse,
+)
+async def schedule_preview(
+    draft_id: UUID,
+    body: AssistantSchedulePreviewRequest,
+    user: CurrentUserDep,
+    session: SessionDep,
+    settings: SettingsDep,
+    _: RequireOriginDep,
+) -> AssistantSchedulePreviewResponse:
+    return await DraftScheduleService(session, settings=settings).preview(
+        user=user, draft_id=draft_id, payload=body
+    )
+
+
+@router.post(
+    "/drafts/{draft_id}/schedule",
+    response_model=AssistantScheduleConfirmResponse,
+    status_code=201,
+)
+async def schedule_confirm(
+    draft_id: UUID,
+    body: AssistantScheduleConfirmRequest,
+    user: CurrentUserDep,
+    session: SessionDep,
+    settings: SettingsDep,
+    _: RequireOriginDep,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> AssistantScheduleConfirmResponse:
+    if not idempotency_key:
+        raise UnprocessableError("Idempotency-Key header is required.")
+    return await DraftScheduleService(session, settings=settings).confirm(
+        user=user,
+        draft_id=draft_id,
+        payload=body,
+        idempotency_key=idempotency_key,
     )
