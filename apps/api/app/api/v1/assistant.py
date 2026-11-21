@@ -76,6 +76,19 @@ async def get_thread(
     )
 
 
+@router.delete("/threads/{thread_id}", status_code=204)
+async def delete_thread(
+    thread_id: UUID,
+    user: CurrentUserDep,
+    session: SessionDep,
+    settings: SettingsDep,
+    _: RequireOriginDep,
+) -> None:
+    await AssistantService(session, settings=settings).delete_thread(
+        user=user, thread_id=thread_id
+    )
+
+
 @router.post(
     "/threads/{thread_id}/messages",
     response_model=AssistantTurnResponse,

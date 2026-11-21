@@ -1,4 +1,5 @@
 import {
+  apiDeleteEmpty,
   apiGet,
   apiPatchJson,
   apiPostJson,
@@ -290,6 +291,16 @@ export async function getAssistantThread(
   signal?: AbortSignal,
 ): Promise<AssistantThreadDetail> {
   return apiGet(`/api/v1/assistant/threads/${threadId}`, parseThreadDetail, {
+    signal,
+    credentials: "include",
+  });
+}
+
+export async function deleteAssistantThread(
+  threadId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  await apiDeleteEmpty(`/api/v1/assistant/threads/${threadId}`, {
     signal,
     credentials: "include",
   });

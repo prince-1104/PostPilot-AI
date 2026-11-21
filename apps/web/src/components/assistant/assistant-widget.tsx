@@ -102,6 +102,7 @@ export function AssistantWidget({
   const [preview, setPreview] = useState<AssistantSchedulePreview | null>(null);
   const [scheduledPost, setScheduledPost] = useState<ScheduledPost | null>(null);
   const [scheduleIdempotencyKey, setScheduleIdempotencyKey] = useState(() => newIdempotencyKey());
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const hydratedRef = useRef(false);
   const pollRef = useRef<number | null>(null);
@@ -171,10 +172,16 @@ export function AssistantWidget({
     return () => controller.abort();
   }, [open, signedOut, threadIdOverride, isStudio]);
 
+  // Scroll only the chat panel — never the page (scrollIntoView was jumping the window).
   useEffect(() => {
     if (!(isStudio || open)) return;
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, draft, open, isStudio, stage, preview, scheduledPost]);
+    const panel = scrollRef.current;
+    if (!panel) return;
+    panel.scrollTo({
+      top: panel.scrollHeight,
+      behavior: reduceMotion ? "auto" : "smooth",
+    });
+  }, [messages, busy, open, isStudio, reduceMotion]);
 
   useEffect(() => {
     if (!open) return;
@@ -627,7 +634,10 @@ export function AssistantWidget({
               </div>
             </header>
 
-            <div className="relative z-10 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-4">
+            <div
+              ref={scrollRef}
+              className="relative z-10 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-4"
+            >
               {status && !status.aiReady ? (
                 <p className="rounded-xl border border-amber/30 bg-amber/10 px-3 py-2 text-sm text-amber">
                   {status.message}

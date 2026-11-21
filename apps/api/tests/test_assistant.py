@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -266,6 +267,38 @@ async def test_model_timeout_does_not_corrupt_thread(ai_settings) -> None:
     assert result["response_state"] == "error"
     assert result.get("draft_content") == "Prior draft about Acme Engineer."
     assert (result.get("confirmed_facts") or {}).get("company") == "Acme"
+
+
+@pytest.mark.asyncio
+async def test_http_delete_thread_archives_and_hides(
+    ai_db_client, db_session, token_encryptor
+) -> None:
+    _user, raw, _ = await seed_user_session_and_connection(
+        db_session, encryptor=token_encryptor, subject=f"asst-del-{uuid4()}"
+    )
+    created = await ai_db_client.post(
+        "/api/v1/assistant/threads",
+        headers=_auth(raw),
+        json={"timezone": "UTC", "title": "Delete me"},
+    )
+    assert created.status_code == 201
+    thread_id = created.json()["id"]
+
+    deleted = await ai_db_client.delete(
+        f"/api/v1/assistant/threads/{thread_id}",
+        headers=_auth(raw),
+    )
+    assert deleted.status_code == 204
+
+    listed = await ai_db_client.get("/api/v1/assistant/threads", headers=_auth(raw))
+    assert listed.status_code == 200
+    assert all(item["id"] != thread_id for item in listed.json())
+
+    missing = await ai_db_client.get(
+        f"/api/v1/assistant/threads/{thread_id}",
+        headers=_auth(raw),
+    )
+    assert missing.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -551,6 +584,54 @@ def test_relative_in_two_hours() -> None:
     )
     assert parsed.ambiguous is False
     assert parsed.proposed_scheduled_at == datetime(2026, 11, 21, 12, 0, tzinfo=UTC)
+
+
+def test_relative_after_two_mints_is_today() -> None:
+    now = datetime(2026, 11, 21, 10, 0, tzinfo=UTC)
+    parsed = parse_schedule_expression(
+        "after 2mints",
+        timezone_name="Asia/Kolkata",
+        now=now,
+    )
+    assert parsed.ambiguous is False
+    assert parsed.proposed_scheduled_at is not None
+    assert parsed.proposed_scheduled_at.date() == datetime(
+        2026, 11, 21, 15, 32, tzinfo=parsed.proposed_scheduled_at.tzinfo
+    ).date()
+    assert parsed.proposed_scheduled_at == datetime(
+        2026, 11, 21, 15, 32, tzinfo=parsed.proposed_scheduled_at.tzinfo
+    )
+
+
+def test_relative_minutes_past_midnight_asks_for_today() -> None:
+    now = datetime(2026, 11, 21, 23, 58, tzinfo=ZoneInfo("Asia/Kolkata"))
+    parsed = parse_schedule_expression(
+        "after 5 minutes",
+        timezone_name="Asia/Kolkata",
+        now=now,
+    )
+    assert parsed.ambiguous is True
+    assert parsed.proposed_scheduled_at is None
+
+
+@pytest.mark.asyncio
+async def test_after_two_mints_draft_ready_fast(ai_settings) -> None:
+    llm = FakeLLMProvider()
+    state = empty_state(thread_id=uuid4(), user_id=uuid4(), timezone="Asia/Kolkata")
+    reference = datetime(2026, 11, 21, 11, 0, tzinfo=UTC)
+    state["last_user_message"] = "Post a small blog on AI Agents after 2mints."
+    result, tel = await run_assistant_turn(
+        llm=llm,
+        settings=ai_settings,
+        state=state,
+        request_received_at=reference,
+    )
+    assert result["response_state"] == "draft_ready"
+    assert result["post_category"] == "educational"
+    assert result.get("proposed_scheduled_at") == "2026-11-21T11:02:00+00:00"
+    assert "today at" in (result.get("assistant_reply") or "").lower()
+    # Requirements LLM skipped on educational fast path.
+    assert not any(t.get("node_name") == "requirements" for t in tel.traces)
 
 
 @pytest.mark.asyncio

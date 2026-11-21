@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { MessageSquarePlus, Sparkles } from "lucide-react";
+import { MessageSquarePlus, Sparkles, Trash2 } from "lucide-react";
 import { cn } from "cn";
 
 import { AssistantWidget } from "@/components/assistant/assistant-widget";
@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton-loader";
 import { ApiError } from "@/lib/api/client";
 import {
   createAssistantThread,
+  deleteAssistantThread,
   listAssistantThreads,
   type AssistantThreadSummary,
 } from "@/lib/api/assistant";
@@ -24,6 +25,7 @@ export function AssistantStudio() {
     "loading",
   );
   const [error, setError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
@@ -32,7 +34,10 @@ export function AssistantStudio() {
       .then((items) => {
         if (controller.signal.aborted) return;
         setThreads(items);
-        setSelectedId((current) => current ?? items[0]?.id ?? null);
+        setSelectedId((current) => {
+          if (current && items.some((item) => item.id === current)) return current;
+          return items[0]?.id ?? null;
+        });
         setLoadState("ready");
       })
       .catch((err: unknown) => {
@@ -49,6 +54,7 @@ export function AssistantStudio() {
 
   async function handleNew() {
     try {
+      setError(null);
       const thread = await createAssistantThread({});
       setThreads((current) => [
         {
@@ -65,6 +71,31 @@ export function AssistantStudio() {
       setSelectedId(thread.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not start a conversation.");
+    }
+  }
+
+  async function handleDelete(threadId: string) {
+    const title =
+      threads.find((item) => item.id === threadId)?.title?.trim() || "this conversation";
+    if (!window.confirm(`Delete “${title}”? This removes it from your conversation list.`)) {
+      return;
+    }
+    setDeletingId(threadId);
+    setError(null);
+    try {
+      await deleteAssistantThread(threadId);
+      setThreads((current) => {
+        const next = current.filter((item) => item.id !== threadId);
+        setSelectedId((selected) => {
+          if (selected !== threadId) return selected;
+          return next[0]?.id ?? null;
+        });
+        return next;
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete conversation.");
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -132,13 +163,14 @@ export function AssistantStudio() {
             <ul className="flex flex-col gap-1">
               {threads.map((thread) => {
                 const active = thread.id === selectedId;
+                const deleting = deletingId === thread.id;
                 return (
-                  <li key={thread.id}>
+                  <li key={thread.id} className="group relative">
                     <button
                       type="button"
                       onClick={() => setSelectedId(thread.id)}
                       className={cn(
-                        "w-full rounded-xl px-3 py-2.5 text-left transition-colors",
+                        "w-full rounded-xl py-2.5 pr-9 pl-3 text-left transition-colors",
                         active
                           ? "bg-surface-active text-foreground"
                           : "text-muted-foreground hover:bg-surface-hover hover:text-foreground",
@@ -151,6 +183,24 @@ export function AssistantStudio() {
                         {thread.currentStage?.replaceAll("_", " ") ?? thread.status}
                       </p>
                     </button>
+                    <Button
+                      type="button"
+                      size="icon-xs"
+                      variant="ghost"
+                      className={cn(
+                        "absolute top-2 right-1.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100",
+                        active && "opacity-70",
+                        deleting && "opacity-100",
+                      )}
+                      aria-label={`Delete ${thread.title?.trim() || "conversation"}`}
+                      disabled={deleting}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void handleDelete(thread.id);
+                      }}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
                   </li>
                 );
               })}

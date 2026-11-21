@@ -434,6 +434,30 @@ def build_assistant_graph(
             pass
         elif not schedule_text:
             schedule_text = state.get("requested_schedule_text")
+        # Catch shorthand the model may omit ("after 2mints") so scheduling still works.
+        if not schedule_text:
+            msg = state.get("last_user_message") or ""
+            if re.search(
+                r"\b(?:after|in)\s+\d+\s*(?:minutes?|mins?|mints?|m|hours?|hrs?|h|days?|d)\b",
+                msg,
+                re.IGNORECASE,
+            ):
+                schedule_text = msg.strip()
+
+        if (
+            post_category in {"educational", "general"}
+            and "topic" not in facts
+            and "topic_summary" not in facts
+        ):
+            topic_seed = (state.get("last_user_message") or "").strip()
+            topic_seed = re.sub(
+                r"\b(?:after|in)\s+\d+\s*(?:minutes?|mins?|mints?|m|hours?|hrs?|h|days?|d)\b",
+                "",
+                topic_seed,
+                flags=re.IGNORECASE,
+            ).strip(" .")
+            if topic_seed:
+                facts["topic"] = topic_seed[:240]
 
         updates: AgentState = {
             "intent_type": result.intent_type,
@@ -487,26 +511,43 @@ def build_assistant_graph(
                 "validation_errors": [],
             }
 
-        payload = {
-            "post_category": state.get("post_category"),
-            "confirmed_facts": state.get("confirmed_facts") or {},
-            "optional_preferences": state.get("optional_preferences") or {},
-            "latest_user_message": state.get("last_user_message") or "",
-            "requested_schedule_text": state.get("requested_schedule_text"),
-            "intent_type": state.get("intent_type"),
-            "has_draft": bool(state.get("draft_content")),
-            "starts_new_topic": bool(state.get("starts_new_topic")),
-        }
-        result: RequirementsResult = await _llm_call(
-            llm,
-            settings,
-            state,
-            tel,
-            system=REQUIREMENTS_SYSTEM,
-            user=json.dumps(payload),
-            schema=RequirementsResult,
-            node_name="requirements",
-        )
+        category_hint = state.get("post_category") or "general"
+        facts_in = dict(state.get("confirmed_facts") or {})
+        # Fast path: educational/general with a topic already from intent — skip an
+        # extra LLM round-trip so the draft reaches the user sooner.
+        if category_hint in {"educational", "general"} and (
+            facts_in.get("topic") or facts_in.get("topic_summary")
+        ):
+            result = RequirementsResult.model_validate(
+                {
+                    "confirmed_facts": facts_in,
+                    "optional_preferences": dict(state.get("optional_preferences") or {}),
+                    "missing_required_fields": [],
+                    "clarification_questions": [],
+                    "ready_to_draft": True,
+                }
+            )
+        else:
+            payload = {
+                "post_category": state.get("post_category"),
+                "confirmed_facts": facts_in,
+                "optional_preferences": state.get("optional_preferences") or {},
+                "latest_user_message": state.get("last_user_message") or "",
+                "requested_schedule_text": state.get("requested_schedule_text"),
+                "intent_type": state.get("intent_type"),
+                "has_draft": bool(state.get("draft_content")),
+                "starts_new_topic": bool(state.get("starts_new_topic")),
+            }
+            result = await _llm_call(
+                llm,
+                settings,
+                state,
+                tel,
+                system=REQUIREMENTS_SYSTEM,
+                user=json.dumps(payload),
+                schema=RequirementsResult,
+                node_name="requirements",
+            )
         reference_raw = state.get("schedule_reference_at")
         reference_now = None
         if reference_raw:
@@ -794,7 +835,23 @@ def build_assistant_graph(
                 if proposed_dt.tzinfo is None:
                     proposed_dt = proposed_dt.replace(tzinfo=UTC)
                 local_dt = proposed_dt.astimezone(ZoneInfo(zone_name))
-                local_label = local_dt.strftime("%b %d, %Y, %I:%M %p").lstrip("0")
+                time_label = local_dt.strftime("%I:%M %p").lstrip("0")
+                ref_raw = state.get("schedule_reference_at")
+                same_day = False
+                if ref_raw:
+                    try:
+                        ref_dt = datetime.fromisoformat(str(ref_raw))
+                        if ref_dt.tzinfo is None:
+                            ref_dt = ref_dt.replace(tzinfo=UTC)
+                        same_day = (
+                            ref_dt.astimezone(ZoneInfo(zone_name)).date() == local_dt.date()
+                        )
+                    except (ValueError, ZoneInfoNotFoundError, TypeError):
+                        same_day = False
+                if same_day:
+                    local_label = f"today at {time_label}"
+                else:
+                    local_label = local_dt.strftime("%b %d, %Y, %I:%M %p").lstrip("0")
                 reply_parts.append(
                     f"\n\nProposed schedule (preview only): {local_label} ({zone_name}). "
                     "Use Approve & Schedule to confirm — chat never publishes by itself."

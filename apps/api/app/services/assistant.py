@@ -138,6 +138,13 @@ class AssistantService:
         thread = await self._require_thread(user_id=user.id, thread_id=thread_id)
         return self._thread_detail(thread)
 
+    async def delete_thread(self, *, user: User, thread_id: UUID) -> None:
+        """Archive a conversation so it disappears from the active list."""
+        thread = await self._require_thread(user_id=user.id, thread_id=thread_id)
+        thread.status = AgentThreadStatus.ARCHIVED.value
+        thread.updated_at = datetime.now(UTC)
+        await self._db.commit()
+
     async def get_draft(self, *, user: User, thread_id: UUID) -> AssistantDraftResponse:
         thread = await self._require_thread(user_id=user.id, thread_id=thread_id)
         draft = self._latest_draft(thread)
@@ -682,7 +689,11 @@ class AssistantService:
             select(AgentThread).where(AgentThread.id == thread_id)
         )
         thread = result.scalar_one_or_none()
-        if thread is None or thread.user_id != user_id:
+        if (
+            thread is None
+            or thread.user_id != user_id
+            or thread.status == AgentThreadStatus.ARCHIVED.value
+        ):
             raise NotFoundError("Assistant thread not found.")
         return thread
 

@@ -158,6 +158,28 @@ export async function apiPostEmpty(
   }
 }
 
+export async function apiDeleteEmpty(
+  path: string,
+  options: RequestOptions = {},
+): Promise<void> {
+  const response = await fetch(`${env.apiBaseUrl}${path}`, {
+    method: "DELETE",
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+    credentials: options.credentials ?? "include",
+    signal: options.signal ?? null,
+  });
+
+  if (response.status === 204) {
+    return;
+  }
+
+  const payload = await parseJson(response);
+  if (!response.ok) {
+    throw toApiError(response.status, payload);
+  }
+}
+
 interface JsonRequestOptions extends RequestOptions {
   body?: unknown;
   headers?: Record<string, string>;

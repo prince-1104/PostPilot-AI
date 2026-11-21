@@ -119,14 +119,16 @@ def parse_schedule_expression(
     )
 
 
+# Accept common typos/shorthand: mins, min, mints, mint, m, hrs, hr, h.
 _RELATIVE_RE = re.compile(
-    r"\b(?:after|in)\s+(?P<n>\d+)\s*(?P<unit>minutes?|mins?|hours?|hrs?|days?)\b",
+    r"\b(?:after|in)\s+(?P<n>\d+)\s*"
+    r"(?P<unit>minutes?|mins?|mints?|m|hours?|hrs?|h|days?|d)\b",
     re.IGNORECASE,
 )
 
 
 def _parse_relative_delay(lower: str, clock: datetime) -> ScheduleParseResult | None:
-    """Resolve 'after 5 minutes' / 'in 2 hours' from the request-time clock."""
+    """Resolve 'after 2 mins' / 'in 2 hours' from the request-time clock (today)."""
     match = _RELATIVE_RE.search(lower)
     if match is None:
         return None
@@ -136,13 +138,26 @@ def _parse_relative_delay(lower: str, clock: datetime) -> ScheduleParseResult | 
         return ScheduleParseResult(
             None, ambiguous=True, reason="Relative delays must be positive."
         )
-    if unit.startswith("min"):
+    if unit.startswith("min") or unit == "m":
         delta = timedelta(minutes=amount)
-    elif unit.startswith("hr") or unit.startswith("hour"):
+        same_day_only = True
+    elif unit.startswith("hr") or unit.startswith("hour") or unit == "h":
         delta = timedelta(hours=amount)
+        same_day_only = True
     else:
         delta = timedelta(days=amount)
+        same_day_only = False
     target = (clock + delta).replace(microsecond=0)
+    # Minute/hour delays mean "later today" — reject if they spill past midnight.
+    if same_day_only and target.date() != clock.date():
+        return ScheduleParseResult(
+            None,
+            ambiguous=True,
+            reason=(
+                "That relative time lands after midnight. Pick a time later today "
+                "(for example, in 10 minutes or at 7 PM)."
+            ),
+        )
     return ScheduleParseResult(target, ambiguous=False)
 
 

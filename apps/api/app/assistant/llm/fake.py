@@ -31,7 +31,7 @@ _INJECTION = re.compile(
     re.IGNORECASE,
 )
 _RELATIVE_SCHEDULE = re.compile(
-    r"\b(?:after|in)\s+\d+\s*(?:minutes?|mins?|hours?|hrs?|days?)\b",
+    r"\b(?:after|in)\s+\d+\s*(?:minutes?|mins?|mints?|m|hours?|hrs?|h|days?|d)\b",
     re.IGNORECASE,
 )
 _REFINE = re.compile(
@@ -175,7 +175,7 @@ def _fake_intent(user: str) -> dict:
             flags=re.IGNORECASE,
         )
         topic = re.sub(
-            r"\b(after|in)\s+\d+\s*(minutes?|mins?|hours?|hrs?|days?)\b",
+            r"\b(after|in)\s+\d+\s*(minutes?|mins?|mints?|m|hours?|hrs?|h|days?|d)\b",
             "",
             topic,
             flags=re.IGNORECASE,
