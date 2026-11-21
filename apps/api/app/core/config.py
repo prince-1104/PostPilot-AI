@@ -17,6 +17,7 @@ Environment = Literal["local", "test", "staging", "production"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 LogFormat = Literal["json", "console"]
 PublishProvider = Literal["fake", "linkedin"]
+AiProvider = Literal["openai", "fake"]
 
 # Scopes PostPilot needs for sign-in and (later) publishing. Configuration that omits
 # any of these fails at startup so we never silently degrade authentication.
@@ -126,6 +127,16 @@ class Settings(BaseSettings):
     publish_dispatcher_interval_seconds: int = Field(default=15, ge=5, le=300)
     publish_recovery_interval_seconds: int = Field(default=30, ge=5, le=600)
 
+    # Phase 5A conversational AI assistant (drafting only — never schedules/publishes).
+    ai_enabled: bool = False
+    ai_provider: AiProvider = "openai"
+    openai_api_key: SecretStr | None = None
+    ai_model: str = Field(default="gpt-4o-mini", min_length=1, max_length=128)
+    ai_request_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
+    ai_max_user_message_chars: int = Field(default=4000, ge=100, le=20_000)
+    ai_max_history_messages: int = Field(default=40, ge=4, le=200)
+    ai_rate_limit_per_minute: int = Field(default=20, ge=1, le=600)
+
     @field_validator(
         "postgres_password",
         "linkedin_client_secret",
@@ -136,6 +147,13 @@ class Settings(BaseSettings):
     def _require_secret(cls, value: SecretStr) -> SecretStr:
         if not value.get_secret_value():
             raise ValueError("must not be empty")
+        return value
+
+    @field_validator("openai_api_key", mode="before")
+    @classmethod
+    def _empty_openai_key_to_none(cls, value: object) -> object:
+        if value is None or value == "":
+            return None
         return value
 
     @field_validator("cors_allowed_origins", mode="before")
@@ -240,7 +258,25 @@ class Settings(BaseSettings):
                 "CELERY_TASK_TIME_LIMIT_SECONDS must be greater than "
                 "CELERY_TASK_SOFT_TIME_LIMIT_SECONDS"
             )
+        if self.ai_enabled and self.ai_provider == "openai":
+            key = self.openai_api_key.get_secret_value() if self.openai_api_key else ""
+            if not key.strip():
+                raise ValueError(
+                    "AI_ENABLED=true with AI_PROVIDER=openai requires a non-empty OPENAI_API_KEY"
+                )
         return self
+
+    @property
+    def ai_ready(self) -> bool:
+        """True when the assistant may call a configured LLM provider."""
+        if not self.ai_enabled:
+            return False
+        if self.ai_provider == "fake":
+            return True
+        if self.ai_provider == "openai":
+            key = self.openai_api_key.get_secret_value() if self.openai_api_key else ""
+            return bool(key.strip())
+        return False
 
     @property
     def linkedin_scope_list(self) -> list[str]:

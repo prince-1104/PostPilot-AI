@@ -42,3 +42,7 @@ class User(Base):
         foreign_keys="ScheduledPost.user_id",
         lazy="selectin",
     )
+    agent_threads: Mapped[list[AgentThread]] = relationship(  # noqa: F821
+        back_populates="user",
+        lazy="selectin",
+    )

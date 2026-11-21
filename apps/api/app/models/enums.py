@@ -37,3 +37,34 @@ class AttemptExecutionState(StrEnum):
     PERMANENT_FAILURE = "permanent_failure"
     AMBIGUOUS = "ambiguous"
     INTERRUPTED = "interrupted"
+
+
+class AgentThreadStatus(StrEnum):
+    """Lifecycle of an AI assistant conversation thread."""
+
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class AgentMessageRole(StrEnum):
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+
+
+class AgentDraftStatus(StrEnum):
+    """Draft is never auto-scheduled or published in Phase 5A."""
+
+    DRAFT = "draft"
+    SUPERSEDED = "superseded"
+    DISCARDED = "discarded"
+
+
+class AssistantResponseState(StrEnum):
+    """Machine-readable assistant turn outcomes for the UI."""
+
+    NEEDS_INFORMATION = "needs_information"
+    GENERATING = "generating"
+    DRAFT_READY = "draft_ready"
+    UNAVAILABLE = "unavailable"
+    ERROR = "error"

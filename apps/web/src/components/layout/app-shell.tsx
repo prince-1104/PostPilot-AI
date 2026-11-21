@@ -1,5 +1,6 @@
 import { Suspense, type ReactNode } from "react";
 
+import { AssistantWidget } from "@/components/assistant/assistant-widget";
 import { AccountSection } from "@/components/layout/account-section";
 import { Logo } from "@/components/layout/logo";
 import { MobileNav } from "@/components/layout/mobile-nav";
@@ -39,6 +40,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="mx-auto w-full max-w-5xl">{children}</div>
         </main>
       </div>
+
+      <Suspense fallback={null}>
+        <AssistantWidget />
+      </Suspense>
     </div>
   );
 }
