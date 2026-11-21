@@ -96,9 +96,9 @@ class AssistantService:
             status=AgentThreadStatus.ACTIVE.value,
             title=payload.title,
             lock_version=0,
-            graph_state=dict(
+            graph_state=snapshot_from_state(
                 empty_state(thread_id=thread_id, user_id=user.id, timezone=payload.timezone)
-            ),
+            ).model_dump(mode="json"),
             created_at=now,
             updated_at=now,
         )
@@ -236,7 +236,10 @@ class AssistantService:
         llm = build_llm_provider(self._settings)
         try:
             final_state, telemetry = await run_assistant_turn(
-                llm=llm, settings=self._settings, state=base_state
+                llm=llm,
+                settings=self._settings,
+                state=base_state,
+                request_received_at=now,
             )
         except Exception:
             # Unexpected failures: restore prior graph snapshot and surface a safe error.
@@ -390,7 +393,11 @@ class AssistantService:
 
         llm = build_llm_provider(self._settings)
         final_state, telemetry = await run_assistant_turn(
-            llm=llm, settings=self._settings, state=base_state, entry=entry
+            llm=llm,
+            settings=self._settings,
+            state=base_state,
+            entry=entry,
+            request_received_at=datetime.now(UTC),
         )
         return await self._finalize_turn(
             thread=thread,

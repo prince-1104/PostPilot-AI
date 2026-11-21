@@ -99,6 +99,7 @@ class IntentResult(BaseModel):
     requested_schedule_text: str | None
     missing_hints: list[str]
     injection_attempt: bool
+    starts_new_topic: bool
     writing_style: WritingStyle | None
     refine_instruction: str | None
     notes: str | None
@@ -120,6 +121,7 @@ class IntentResult(BaseModel):
         data.setdefault("requested_schedule_text", None)
         data.setdefault("missing_hints", [])
         data.setdefault("injection_attempt", False)
+        data.setdefault("starts_new_topic", False)
         data.setdefault("writing_style", None)
         data.setdefault("refine_instruction", None)
         data.setdefault("notes", None)
@@ -285,6 +287,8 @@ class GraphSnapshot(BaseModel):
         "needs_information", "generating", "draft_ready", "unavailable", "error"
     ] = "generating"
     injection_attempt: bool = False
+    starts_new_topic: bool = False
+    schedule_reference_at: datetime | None = None
 
     @field_validator("assumptions", mode="before")
     @classmethod

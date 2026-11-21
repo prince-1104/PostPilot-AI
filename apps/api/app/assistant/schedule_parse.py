@@ -46,8 +46,16 @@ def parse_schedule_expression(
             None, ambiguous=True, reason=f"Unknown timezone: {timezone_name}"
         )
 
-    clock = now.astimezone(zone) if now else datetime.now(zone)
+    reference = now if now is not None else datetime.now(UTC)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=UTC)
+    clock = reference.astimezone(zone)
     lower = text.lower()
+
+    relative = _parse_relative_delay(lower, clock)
+    if relative is not None:
+        return relative
+
     time_match = _TIME_RE.search(text)
     hour, minute = _resolve_clock(time_match)
 
@@ -109,6 +117,33 @@ def parse_schedule_expression(
         ambiguous=True,
         reason="Could not interpret a concrete date/time from the schedule text.",
     )
+
+
+_RELATIVE_RE = re.compile(
+    r"\b(?:after|in)\s+(?P<n>\d+)\s*(?P<unit>minutes?|mins?|hours?|hrs?|days?)\b",
+    re.IGNORECASE,
+)
+
+
+def _parse_relative_delay(lower: str, clock: datetime) -> ScheduleParseResult | None:
+    """Resolve 'after 5 minutes' / 'in 2 hours' from the request-time clock."""
+    match = _RELATIVE_RE.search(lower)
+    if match is None:
+        return None
+    amount = int(match.group("n"))
+    unit = match.group("unit").lower()
+    if amount < 0:
+        return ScheduleParseResult(
+            None, ambiguous=True, reason="Relative delays must be positive."
+        )
+    if unit.startswith("min"):
+        delta = timedelta(minutes=amount)
+    elif unit.startswith("hr") or unit.startswith("hour"):
+        delta = timedelta(hours=amount)
+    else:
+        delta = timedelta(days=amount)
+    target = (clock + delta).replace(microsecond=0)
+    return ScheduleParseResult(target, ambiguous=False)
 
 
 def _resolve_clock(match: re.Match[str] | None) -> tuple[int | None, int | None]:

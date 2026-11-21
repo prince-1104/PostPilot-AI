@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal, TypedDict
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from langgraph.graph import END, START, StateGraph
 
@@ -88,6 +89,20 @@ class AgentState(TypedDict, total=False):
     assistant_reply: str | None
     response_state: str
     injection_attempt: bool
+    starts_new_topic: bool
+    schedule_reference_at: str | None
+
+
+def _parse_optional_iso(value: str | datetime | None) -> datetime | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 def empty_state(*, thread_id: UUID, user_id: UUID, timezone: str | None = None) -> AgentState:
@@ -114,6 +129,8 @@ def empty_state(*, thread_id: UUID, user_id: UUID, timezone: str | None = None) 
         "current_stage": "intent",
         "response_state": "generating",
         "injection_attempt": False,
+        "starts_new_topic": False,
+        "schedule_reference_at": None,
     }
 
 
@@ -154,6 +171,8 @@ def snapshot_from_state(state: AgentState) -> GraphSnapshot:
         assistant_reply=state.get("assistant_reply"),
         response_state=state.get("response_state") or "generating",  # type: ignore[arg-type]
         injection_attempt=bool(state.get("injection_attempt")),
+        starts_new_topic=bool(state.get("starts_new_topic")),
+        schedule_reference_at=_parse_optional_iso(state.get("schedule_reference_at")),
     )
 
 
@@ -196,6 +215,10 @@ def state_from_snapshot(snapshot: GraphSnapshot | dict[str, Any]) -> AgentState:
         "assistant_reply": data.assistant_reply,
         "response_state": data.response_state,
         "injection_attempt": data.injection_attempt,
+        "starts_new_topic": bool(data.starts_new_topic),
+        "schedule_reference_at": (
+            data.schedule_reference_at.isoformat() if data.schedule_reference_at else None
+        ),
     }
 
 
@@ -342,30 +365,96 @@ def build_assistant_graph(
             schema=IntentResult,
             node_name="intent",
         )
-        facts = dict(state.get("confirmed_facts") or {})
-        facts.update(result.extracted_facts_map)
         style: WritingStyle = result.writing_style or state.get("writing_style") or "professional"  # type: ignore[assignment]
-        # Preserve an established category on follow-ups that classify as "general".
         post_category = result.post_category
-        if (
-            state.get("post_category")
-            and post_category == "general"
-            and result.intent_type not in {"unsupported"}
+        prior_category = state.get("post_category")
+        create_intents = {"create_post_draft", "create_scheduled_post"}
+        starts_new = bool(result.starts_new_topic)
+        job_to_other = prior_category == "job_announcement" and post_category in {
+            "educational",
+            "general",
+            "product_launch",
+            "event_announcement",
+            "professional_update",
+        }
+        topic_pivot = bool(
+            result.extracted_facts_map.get("topic")
+            or result.extracted_facts_map.get("topic_summary")
+        ) and prior_category == "job_announcement" and post_category in {
+            "educational",
+            "general",
+        }
+        if result.intent_type in create_intents and (
+            not prior_category
+            or (post_category != prior_category and post_category != "general")
+            or job_to_other
+            or topic_pivot
         ):
-            post_category = state.get("post_category")
+            starts_new = True
+        if result.intent_type in {"refine_draft", "clarify"}:
+            starts_new = False
+            # Preserve established category on same-topic follow-ups classified as general.
+            if prior_category and post_category == "general":
+                post_category = prior_category
+
+        if starts_new:
+            facts = dict(result.extracted_facts_map)
+            # Drop prior draft prefs on topic switch, but keep force_* test/debug hooks.
+            prior_optional = dict(state.get("optional_preferences") or {})
+            optional = {
+                key: value
+                for key, value in prior_optional.items()
+                if key.startswith("force_")
+            }
+            draft_reset: AgentState = {
+                "draft_content": None,
+                "suggested_hashtags": [],
+                "suggested_skills": [],
+                "suggested_responsibilities": [],
+                "assumptions": [],
+                "review_passed": None,
+                "review_issues": [],
+                "review_suggestions": [],
+                "unsupported_claims": [],
+                "missing_required_fields": [],
+                "clarification_questions": [],
+                "refine_instruction": None,
+                "proposed_scheduled_at": None,
+                "validation_errors": [],
+            }
+        else:
+            facts = dict(state.get("confirmed_facts") or {})
+            facts.update(result.extracted_facts_map)
+            optional = dict(state.get("optional_preferences") or {})
+            draft_reset = {}
+
+        schedule_text = result.requested_schedule_text
+        if starts_new:
+            # Do not inherit an old job schedule when pivoting topics.
+            pass
+        elif not schedule_text:
+            schedule_text = state.get("requested_schedule_text")
+
         updates: AgentState = {
             "intent_type": result.intent_type,
             "post_category": post_category,
             "confirmed_facts": facts,
-            "requested_schedule_text": result.requested_schedule_text
-            or state.get("requested_schedule_text"),
+            "optional_preferences": optional,
+            "requested_schedule_text": schedule_text,
             "writing_style": style,
-            "refine_instruction": result.refine_instruction or state.get("refine_instruction"),
+            "refine_instruction": (
+                result.refine_instruction
+                if result.intent_type == "refine_draft"
+                else (None if starts_new else state.get("refine_instruction"))
+            ),
             "current_stage": "requirements",
-            "injection_attempt": result.injection_attempt,
+            "injection_attempt": bool(result.injection_attempt),
+            "starts_new_topic": starts_new,
             "response_state": "generating",
             "llm_calls_this_turn": state.get("llm_calls_this_turn") or 0,
             "auto_revision_count": 0,
+            "validation_errors": [],
+            **draft_reset,
         }
         if result.injection_attempt:
             updates.update(
@@ -378,6 +467,7 @@ def build_assistant_graph(
                         "you'd like to draft."
                     ),
                     "validation_errors": ["prompt_injection_blocked"],
+                    "clarification_questions": [],
                 }
             )
         return updates
@@ -394,6 +484,7 @@ def build_assistant_graph(
                 "assistant_reply": "Updating your draft with the requested changes…",
                 "missing_required_fields": [],
                 "clarification_questions": [],
+                "validation_errors": [],
             }
 
         payload = {
@@ -404,6 +495,7 @@ def build_assistant_graph(
             "requested_schedule_text": state.get("requested_schedule_text"),
             "intent_type": state.get("intent_type"),
             "has_draft": bool(state.get("draft_content")),
+            "starts_new_topic": bool(state.get("starts_new_topic")),
         }
         result: RequirementsResult = await _llm_call(
             llm,
@@ -415,17 +507,52 @@ def build_assistant_graph(
             schema=RequirementsResult,
             node_name="requirements",
         )
+        reference_raw = state.get("schedule_reference_at")
+        reference_now = None
+        if reference_raw:
+            try:
+                reference_now = datetime.fromisoformat(reference_raw)
+            except ValueError:
+                reference_now = None
         schedule = parse_schedule_expression(
             state.get("requested_schedule_text"),
             timezone_name=state.get("timezone"),
+            now=reference_now,
         )
         proposed_iso = (
             to_utc(schedule.proposed_scheduled_at).isoformat()
             if schedule.proposed_scheduled_at
-            else state.get("proposed_scheduled_at")
+            else (None if state.get("starts_new_topic") else state.get("proposed_scheduled_at"))
         )
         questions = list(result.clarification_questions)
         missing = list(result.missing_required_fields)
+        facts = dict(result.confirmed_facts_map)
+        category = state.get("post_category") or "general"
+        # Educational / general posts: topic from the user message is enough.
+        if category in {"educational", "general"}:
+            latest = (state.get("last_user_message") or "").strip()
+            if "topic" not in facts and "topic_summary" not in facts and latest:
+                facts["topic"] = latest[:240]
+            missing = [
+                m
+                for m in missing
+                if m
+                not in {
+                    "audience_level",
+                    "audience",
+                    "company",
+                    "location_or_remote",
+                    "experience",
+                    "salary",
+                    "role",
+                }
+                and m not in facts
+            ]
+            if ("topic" in facts or "topic_summary" in facts) and not any(
+                m in {"topic", "topic_summary"} for m in missing
+            ):
+                missing = [m for m in missing if m not in {"topic", "topic_summary"}]
+                questions = []
         if (
             schedule.ambiguous
             and state.get("requested_schedule_text")
@@ -434,7 +561,25 @@ def build_assistant_graph(
         ):
             questions.append(schedule.reason)
 
-        if result.ready_to_draft and not missing:
+        ready = (result.ready_to_draft or category in {"educational", "general"}) and not missing
+        if category in {"educational", "general"} and (
+            "topic" in facts or "topic_summary" in facts
+        ):
+            missing = []
+            # Keep only schedule ambiguity questions; drop job-style clarifications.
+            schedule_only = (
+                [schedule.reason]
+                if (
+                    schedule.ambiguous
+                    and state.get("requested_schedule_text")
+                    and schedule.reason
+                )
+                else []
+            )
+            questions = schedule_only
+            ready = not schedule_only
+
+        if ready:
             reply = "I have enough detail to draft a LinkedIn post. Generating a draft now…"
             stage = "writing"
             response_state = "generating"
@@ -449,7 +594,7 @@ def build_assistant_graph(
             response_state = "needs_information"
 
         return {
-            "confirmed_facts": result.confirmed_facts_map,
+            "confirmed_facts": facts,
             "optional_preferences": result.optional_preferences_map,
             "missing_required_fields": missing,
             "clarification_questions": questions[:3],
@@ -457,6 +602,7 @@ def build_assistant_graph(
             "current_stage": stage,
             "response_state": response_state,
             "assistant_reply": reply,
+            "validation_errors": [],
             "llm_calls_this_turn": state.get("llm_calls_this_turn") or 0,
         }
 
@@ -640,6 +786,24 @@ def build_assistant_graph(
                 "\n\nSuggestions:\n"
                 + "\n".join(f"- {s}" for s in (state.get("review_suggestions") or [])[:4])
             )
+        proposed = state.get("proposed_scheduled_at")
+        zone_name = state.get("timezone")
+        if proposed and zone_name:
+            try:
+                proposed_dt = datetime.fromisoformat(proposed)
+                if proposed_dt.tzinfo is None:
+                    proposed_dt = proposed_dt.replace(tzinfo=UTC)
+                local_dt = proposed_dt.astimezone(ZoneInfo(zone_name))
+                local_label = local_dt.strftime("%b %d, %Y, %I:%M %p").lstrip("0")
+                reply_parts.append(
+                    f"\n\nProposed schedule (preview only): {local_label} ({zone_name}). "
+                    "Use Approve & Schedule to confirm — chat never publishes by itself."
+                )
+            except (ValueError, ZoneInfoNotFoundError, TypeError):
+                reply_parts.append(
+                    "\n\nA proposed schedule was detected. Use Approve & Schedule to confirm "
+                    "the exact time — chat never publishes by itself."
+                )
         reply_parts.append(
             "\n\nYou can rewrite, change tone, or edit this text. "
             "Nothing is scheduled or published from this assistant."
@@ -715,10 +879,16 @@ async def run_assistant_turn(
     settings: Settings,
     state: AgentState,
     entry: str = "intent",
+    request_received_at: datetime | None = None,
 ) -> tuple[AgentState, TurnTelemetry]:
     """Execute one user turn through the compiled graph and merge final state."""
     working: AgentState = dict(state)  # type: ignore[assignment]
     working["llm_calls_this_turn"] = 0
+    # Relative schedules ("after 5 minutes") resolve from this server timestamp.
+    reference = request_received_at or datetime.now(UTC)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=UTC)
+    working["schedule_reference_at"] = reference.isoformat()
     if entry in {"writing", "revise"}:
         working["auto_revision_count"] = 0
     telemetry = TurnTelemetry()

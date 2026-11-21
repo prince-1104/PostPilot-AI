@@ -20,8 +20,18 @@ from app.observability.usage import LLMResult, LLMUsage
 T = TypeVar("T", bound=BaseModel)
 
 _INJECTION = re.compile(
-    r"(ignore\s+(all\s+)?(previous\s+)?instructions|publish\s+immediately|"
-    r"bypass\s+approval|exfiltrate|system\s+prompt)",
+    r"("
+    r"ignore\s+(all\s+)?(previous\s+|prior\s+)?(instructions|rules|system\s+prompt)"
+    r"|publish\s+immediately"
+    r"|bypass\s+approval"
+    r"|skip\s+(the\s+)?(approval|confirmation)"
+    r"|exfiltrate"
+    r"|reveal\s+(the\s+)?system\s+prompt"
+    r")",
+    re.IGNORECASE,
+)
+_RELATIVE_SCHEDULE = re.compile(
+    r"\b(?:after|in)\s+\d+\s*(?:minutes?|mins?|hours?|hrs?|days?)\b",
     re.IGNORECASE,
 )
 _REFINE = re.compile(
@@ -98,6 +108,7 @@ def _fake_intent(user: str) -> dict:
             "post_category": "general",
             "extracted_facts": {},
             "injection_attempt": True,
+            "starts_new_topic": False,
             "notes": "Prompt injection language detected; refusing autonomous actions.",
         }
 
@@ -118,16 +129,60 @@ def _fake_intent(user: str) -> dict:
             "post_category": "general",
             "extracted_facts": {},
             "injection_attempt": False,
+            "starts_new_topic": False,
             "writing_style": style,
             "refine_instruction": user.strip()[:500],
+        }
+
+    # Clarification pushback is not injection and not a brand-new topic.
+    if re.search(r"\b(ignore those questions|just post it|just draft it)\b", lower):
+        return {
+            "intent_type": "clarify",
+            "post_category": "general",
+            "extracted_facts": {},
+            "injection_attempt": False,
+            "starts_new_topic": False,
+            "notes": "User wants to proceed without answering; requirements still apply.",
         }
 
     category = "general"
     facts: dict[str, str] = {}
     missing: list[str] = []
     schedule: str | None = None
+    starts_new_topic = True
 
-    if "job" in lower or "hiring" in lower or "engineer" in lower:
+    educational_hint = bool(
+        re.search(
+            r"\b(blog|explainer|educational|tips?|learn|how\s+ai\s+agents|"
+            r"small\s+blog|write\s+about|post\s+about)\b",
+            lower,
+        )
+        or ("ai agents" in lower and "hiring" not in lower and "engineer" not in lower)
+    )
+    job_hint = bool(
+        re.search(r"\b(job|hiring|role|position)\b", lower)
+        or ("engineer" in lower and "ai agents" not in lower)
+        or "ai engineer" in lower
+    )
+
+    if educational_hint and not job_hint:
+        category = "educational"
+        topic = user.strip()
+        topic = re.sub(
+            r"^(post|write|share|draft)\s+(a\s+)?(small\s+)?(blog|post|update)\s+(on|about)\s+",
+            "",
+            topic,
+            flags=re.IGNORECASE,
+        )
+        topic = re.sub(
+            r"\b(after|in)\s+\d+\s*(minutes?|mins?|hours?|hrs?|days?)\b",
+            "",
+            topic,
+            flags=re.IGNORECASE,
+        ).strip(" .")
+        facts["topic"] = topic or "AI Agents"
+        missing = []
+    elif job_hint:
         category = "job_announcement"
         role_match = re.search(
             r"(?:for|role|position|hiring(?:\s+an?)?)\s+([A-Za-z0-9 /+#-]+?)"
@@ -148,9 +203,6 @@ def _fake_intent(user: str) -> dict:
     elif "product" in lower or "launch" in lower:
         category = "product_launch"
         missing.extend(["product_name", "key_features", "audience"])
-    elif "learn" in lower or "educat" in lower or "tip" in lower:
-        category = "educational"
-        missing.extend(["topic", "audience_level"])
     elif "event" in lower or "webinar" in lower or "meetup" in lower:
         category = "event_announcement"
         missing.extend(["event_name", "event_time", "audience"])
@@ -164,7 +216,11 @@ def _fake_intent(user: str) -> dict:
         user,
         re.IGNORECASE,
     )
-    if time_match or re.search(r"\d{1,2}\s*(?:am|pm)", lower):
+    if (
+        time_match
+        or re.search(r"\d{1,2}\s*(?:am|pm)", lower)
+        or _RELATIVE_SCHEDULE.search(user)
+    ):
         schedule = user.strip()
 
     if "company" in lower:
@@ -207,6 +263,7 @@ def _fake_intent(user: str) -> dict:
         "requested_schedule_text": schedule,
         "missing_hints": missing,
         "injection_attempt": False,
+        "starts_new_topic": starts_new_topic,
         "writing_style": style,
     }
 
@@ -262,7 +319,7 @@ def _fake_requirements(user: str) -> dict:
     required_by_category = {
         "job_announcement": ["role", "company", "location_or_remote", "experience"],
         "product_launch": ["product_name", "key_features", "audience"],
-        "educational": ["topic", "audience_level"],
+        "educational": ["topic"],
         "event_announcement": ["event_name", "event_time", "audience"],
         "professional_update": ["update_summary"],
         "general": ["topic_summary"],
@@ -271,8 +328,11 @@ def _fake_requirements(user: str) -> dict:
     for k, v in (context.get("confirmed_facts") or {}).items():
         facts.setdefault(k, v)
 
-    if category == "general" and latest and "topic_summary" not in facts:
-        facts["topic_summary"] = latest[:240]
+    if category in {"general", "educational"} and latest:
+        if "topic_summary" not in facts and "topic" not in facts:
+            key = "topic" if category == "educational" else "topic_summary"
+            facts[key] = latest[:240]
+        facts.setdefault("audience_level", "general professional audience")
 
     missing = [field for field in required if field not in facts or not str(facts[field]).strip()]
     questions_map = {
@@ -313,6 +373,28 @@ def _fake_writing(system: str, user: str) -> dict:
     current = str(context.get("current_draft") or "")
     force_bad = str(optional.get("force_bad_draft") or "")
     unsupported = context.get("unsupported_claims") or []
+
+    if category in {"educational", "general"} and not current:
+        topic = facts.get("topic") or facts.get("topic_summary") or "AI Agents"
+        content = (
+            f"AI agents are reshaping how teams get work done.\n\n"
+            f"Here's a concise take on {topic}: modern agents combine tool use, multi-step "
+            f"planning, and orchestration — with human oversight and guardrails for "
+            f"reliability.\n\n"
+            f"They shine when workflows need reasoning across tools, not just a single prompt.\n\n"
+            f"What agent workflow are you exploring next?\n\n"
+            f"#AIAgents #ArtificialIntelligence #LLM #Automation #Tech"
+        )
+        return {
+            "content": content[:3000],
+            "suggested_hashtags": ["#AIAgents", "#ArtificialIntelligence", "#LLM", "#Automation"],
+            "confirmed_facts_used": facts,
+            "assumptions": ["Audience is familiar with basic AI concepts."],
+            "missing_information": [],
+            "quality_warnings": [],
+            "suggested_skills": [],
+            "suggested_responsibilities": [],
+        }
 
     suggested_skills = [
         "Python/FastAPI",

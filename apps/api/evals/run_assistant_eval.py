@@ -29,10 +29,9 @@ async def _run_case(case: dict, settings: Settings) -> tuple[bool, str]:
         state, _ = await run_assistant_turn(llm=llm, settings=settings, state=state)
 
     state["last_user_message"] = case["user_message"]
-    entry = "revise" if case.get("setup_message") else "intent"
-    if case.get("setup_message"):
+    entry = case.get("graph_entry", "intent")
+    if entry == "revise":
         state["refine_instruction"] = case["user_message"]
-        entry = "revise"
     final, _tel = await run_assistant_turn(
         llm=llm, settings=settings, state=state, entry=entry
     )
@@ -46,6 +45,12 @@ async def _run_case(case: dict, settings: Settings) -> tuple[bool, str]:
             final.get("validation_errors")
         ):
             return False, "injection not blocked"
+
+    if expect.get("injection_attempt") is False and final.get("injection_attempt"):
+        return False, "false-positive injection"
+
+    if expect.get("has_proposed_schedule") and not final.get("proposed_scheduled_at"):
+        return False, "missing proposed schedule"
 
     if expect.get("clarification_min"):
         qs = final.get("clarification_questions") or []

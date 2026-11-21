@@ -42,16 +42,16 @@ const TONES: WritingStyle[] = [
 ];
 
 const STAGE_LABELS: Record<string, string> = {
-  intent: "Understanding your request",
-  requirements: "Gathering requirements",
+  intent: "Understanding request",
+  requirements: "Understanding request",
   awaiting_user: "Waiting for your answers",
-  writing: "Writing your post",
-  reviewing: "Reviewing the draft",
-  revising: "Revising draft",
-  validating: "Validating draft",
-  draft_ready: "Draft ready",
+  writing: "Writing draft",
+  reviewing: "Reviewing content",
+  revising: "Reviewing content",
+  validating: "Ready for approval",
+  draft_ready: "Ready for approval",
   error: "Needs attention",
-  generating: "Working",
+  generating: "Understanding request",
 };
 
 export interface AssistantWidgetProps {
@@ -272,8 +272,13 @@ export function AssistantWidget({
         instantToWallLocalInput(turn.draft.proposedScheduledAt, turn.draft.timezone),
       );
     }
-    if (turn.state === "unavailable" || turn.state === "error") {
-      setError(turn.assistantMessage?.content ?? "Assistant turn failed.");
+    if (turn.state === "unavailable") {
+      setError(turn.assistantMessage?.content ?? "Assistant is unavailable.");
+    } else if (turn.state === "error") {
+      // Refusal/error text already appears in the message list — avoid duplicating it.
+      setError(null);
+    } else {
+      setError(null);
     }
   }
 
@@ -715,11 +720,17 @@ export function AssistantWidget({
               </div>
             ) : null}
 
-            {reviewIssues.length > 0 || validationErrors.length > 0 ? (
+            {reviewIssues.length > 0 ||
+            validationErrors.filter((item) => item !== "prompt_injection_blocked").length > 0 ? (
               <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm">
                 <p className="mb-1 font-medium">Review notes</p>
                 <ul className="list-disc space-y-1 pl-4 text-muted-foreground">
-                  {[...reviewIssues, ...validationErrors].slice(0, 6).map((item) => (
+                  {[
+                    ...reviewIssues,
+                    ...validationErrors.filter((item) => item !== "prompt_injection_blocked"),
+                  ]
+                    .slice(0, 6)
+                    .map((item) => (
                     <li key={item}>{item}</li>
                   ))}
                 </ul>
