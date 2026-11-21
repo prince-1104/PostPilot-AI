@@ -1,4 +1,10 @@
-import { apiGet, apiPostJson, isRecord, UnexpectedResponseError } from "@/lib/api/client";
+import {
+  apiGet,
+  apiPatchJson,
+  apiPostJson,
+  isRecord,
+  UnexpectedResponseError,
+} from "@/lib/api/client";
 
 export type AssistantState =
   | "needs_information"
@@ -6,6 +12,13 @@ export type AssistantState =
   | "draft_ready"
   | "unavailable"
   | "error";
+
+export type WritingStyle =
+  | "professional"
+  | "conversational"
+  | "concise"
+  | "detailed"
+  | "promotional";
 
 export interface AssistantStatus {
   aiEnabled: boolean;
@@ -45,6 +58,7 @@ export interface AssistantThreadSummary {
   createdAt: string;
   updatedAt: string;
   responseState: AssistantState | null;
+  currentStage: string | null;
 }
 
 export interface AssistantThreadDetail {
@@ -57,17 +71,30 @@ export interface AssistantThreadDetail {
   draft: AssistantDraft | null;
   clarificationQuestions: string[];
   responseState: AssistantState;
+  currentStage: string | null;
+  writingStyle: WritingStyle | null;
+  reviewIssues: string[];
+  reviewSuggestions: string[];
+  validationErrors: string[];
+  lockVersion: number;
   assistantReady: boolean;
 }
 
 export interface AssistantTurn {
   threadId: string;
   state: AssistantState;
+  currentStage: string | null;
   assistantMessage: AssistantMessage | null;
   clarificationQuestions: string[];
   draft: AssistantDraft | null;
   proposedScheduledAt: string | null;
   timezone: string | null;
+  writingStyle: WritingStyle | null;
+  reviewIssues: string[];
+  reviewSuggestions: string[];
+  validationErrors: string[];
+  lockVersion: number;
+  idempotentReplay: boolean;
 }
 
 function requireString(value: unknown, field: string): string {
@@ -79,6 +106,10 @@ function requireString(value: unknown, field: string): string {
 
 function optionalString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
 function parseMessage(payload: unknown): AssistantMessage {
@@ -133,10 +164,14 @@ function parseThreadDetail(payload: unknown): AssistantThreadDetail {
     updatedAt: requireString(payload.updated_at, "updated_at"),
     messages,
     draft: parseDraft(payload.draft),
-    clarificationQuestions: Array.isArray(payload.clarification_questions)
-      ? payload.clarification_questions.filter((q): q is string => typeof q === "string")
-      : [],
+    clarificationQuestions: stringList(payload.clarification_questions),
     responseState: requireString(payload.response_state, "response_state") as AssistantState,
+    currentStage: optionalString(payload.current_stage),
+    writingStyle: (optionalString(payload.writing_style) as WritingStyle | null) ?? null,
+    reviewIssues: stringList(payload.review_issues),
+    reviewSuggestions: stringList(payload.review_suggestions),
+    validationErrors: stringList(payload.validation_errors),
+    lockVersion: typeof payload.lock_version === "number" ? payload.lock_version : 0,
     assistantReady: Boolean(payload.assistant_ready),
   };
 }
@@ -152,6 +187,7 @@ function parseThreadList(payload: unknown): AssistantThreadSummary[] {
       createdAt: requireString(item.created_at, "created_at"),
       updatedAt: requireString(item.updated_at, "updated_at"),
       responseState: (optionalString(item.response_state) as AssistantState | null) ?? null,
+      currentStage: optionalString(item.current_stage),
     };
   });
 }
@@ -161,13 +197,18 @@ function parseTurn(payload: unknown): AssistantTurn {
   return {
     threadId: requireString(payload.thread_id, "thread_id"),
     state: requireString(payload.state, "state") as AssistantState,
+    currentStage: optionalString(payload.current_stage),
     assistantMessage: payload.assistant_message ? parseMessage(payload.assistant_message) : null,
-    clarificationQuestions: Array.isArray(payload.clarification_questions)
-      ? payload.clarification_questions.filter((q): q is string => typeof q === "string")
-      : [],
+    clarificationQuestions: stringList(payload.clarification_questions),
     draft: parseDraft(payload.draft),
     proposedScheduledAt: optionalString(payload.proposed_scheduled_at),
     timezone: optionalString(payload.timezone),
+    writingStyle: (optionalString(payload.writing_style) as WritingStyle | null) ?? null,
+    reviewIssues: stringList(payload.review_issues),
+    reviewSuggestions: stringList(payload.review_suggestions),
+    validationErrors: stringList(payload.validation_errors),
+    lockVersion: typeof payload.lock_version === "number" ? payload.lock_version : 0,
+    idempotentReplay: Boolean(payload.idempotent_replay),
   };
 }
 
@@ -207,11 +248,61 @@ export async function getAssistantThread(
 
 export async function postAssistantMessage(
   threadId: string,
-  body: { content: string; timezone?: string },
+  body: {
+    content: string;
+    timezone?: string;
+    clientMessageId?: string;
+    tone?: WritingStyle;
+  },
   signal?: AbortSignal,
 ): Promise<AssistantTurn> {
   return apiPostJson(`/api/v1/assistant/threads/${threadId}/messages`, parseTurn, {
     signal,
-    body,
+    body: {
+      content: body.content,
+      timezone: body.timezone,
+      client_message_id: body.clientMessageId,
+      tone: body.tone,
+    },
+  });
+}
+
+export async function patchAssistantDraft(
+  threadId: string,
+  body: { content: string; expectedVersion: number; expectedLockVersion?: number },
+  signal?: AbortSignal,
+): Promise<AssistantDraft> {
+  const draft = await apiPatchJson(`/api/v1/assistant/threads/${threadId}/draft`, parseDraft, {
+    signal,
+    body: {
+      content: body.content,
+      expected_version: body.expectedVersion,
+      expected_lock_version: body.expectedLockVersion,
+    },
+  });
+  if (!draft) throw new UnexpectedResponseError("Draft patch returned empty.");
+  return draft;
+}
+
+export async function runAssistantDraftAction(
+  threadId: string,
+  body: {
+    action: "regenerate" | "rewrite" | "set_tone";
+    instruction?: string;
+    tone?: WritingStyle;
+    expectedVersion?: number;
+    clientMessageId?: string;
+  },
+  signal?: AbortSignal,
+): Promise<AssistantTurn> {
+  return apiPostJson(`/api/v1/assistant/threads/${threadId}/draft/actions`, parseTurn, {
+    signal,
+    body: {
+      action: body.action,
+      instruction: body.instruction,
+      tone: body.tone,
+      expected_version: body.expectedVersion,
+      client_message_id: body.clientMessageId,
+    },
   });
 }

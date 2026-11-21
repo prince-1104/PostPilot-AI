@@ -1,6 +1,6 @@
 "use client";
 
-import { MessageCircle, X } from "lucide-react";
+import { Copy, MessageCircle, RefreshCw, X } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -9,12 +9,44 @@ import {
   createAssistantThread,
   getAssistantStatus,
   getAssistantThread,
+  listAssistantThreads,
+  patchAssistantDraft,
   postAssistantMessage,
+  runAssistantDraftAction,
   type AssistantDraft,
   type AssistantMessage,
   type AssistantStatus,
+  type WritingStyle,
 } from "@/lib/api/assistant";
 import { guessBrowserTimezone } from "@/lib/timezone";
+
+const TONES: WritingStyle[] = [
+  "professional",
+  "conversational",
+  "concise",
+  "detailed",
+  "promotional",
+];
+
+const STAGE_LABELS: Record<string, string> = {
+  intent: "Understanding request",
+  requirements: "Gathering details",
+  awaiting_user: "Waiting for your answers",
+  writing: "Writing draft",
+  reviewing: "Reviewing draft",
+  revising: "Revising draft",
+  validating: "Validating draft",
+  draft_ready: "Draft ready",
+  error: "Needs attention",
+  generating: "Working",
+};
+
+function newClientMessageId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
 export function AssistantWidget() {
   const [open, setOpen] = useState(false);
@@ -29,7 +61,15 @@ export function AssistantWidget() {
   const [error, setError] = useState<string | null>(null);
   const [signedOut, setSignedOut] = useState(false);
   const [statusLoaded, setStatusLoaded] = useState(false);
+  const [stage, setStage] = useState<string | null>(null);
+  const [tone, setTone] = useState<WritingStyle>("professional");
+  const [reviewIssues, setReviewIssues] = useState<string[]>([]);
+  const [reviewSuggestions, setReviewSuggestions] = useState<string[]>([]);
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const [lockVersion, setLockVersion] = useState(0);
+  const [copied, setCopied] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const hydratedRef = useRef(false);
 
   const timezone = guessBrowserTimezone();
 
@@ -57,18 +97,90 @@ export function AssistantWidget() {
   }, []);
 
   useEffect(() => {
+    if (!open || hydratedRef.current || signedOut) return;
+    const controller = new AbortController();
+    void listAssistantThreads(controller.signal)
+      .then(async (threads) => {
+        if (controller.signal.aborted || threads.length === 0) {
+          hydratedRef.current = true;
+          return;
+        }
+        const latest = threads[0];
+        if (!latest) {
+          hydratedRef.current = true;
+          return;
+        }
+        const detail = await getAssistantThread(latest.id, controller.signal);
+        if (controller.signal.aborted) return;
+        applyThread(detail);
+        hydratedRef.current = true;
+      })
+      .catch(() => {
+        hydratedRef.current = true;
+      });
+    return () => controller.abort();
+  }, [open, signedOut]);
+
+  useEffect(() => {
     if (!open) return;
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, draft, open]);
+  }, [messages, draft, open, stage]);
+
+  function applyThread(detail: {
+    id: string;
+    messages: AssistantMessage[];
+    draft: AssistantDraft | null;
+    clarificationQuestions: string[];
+    currentStage: string | null;
+    writingStyle: WritingStyle | null;
+    reviewIssues: string[];
+    reviewSuggestions: string[];
+    validationErrors: string[];
+    lockVersion: number;
+  }) {
+    setThreadId(detail.id);
+    setMessages(detail.messages);
+    setDraft(detail.draft);
+    setDraftText(detail.draft?.content ?? "");
+    setQuestions(detail.clarificationQuestions);
+    setStage(detail.currentStage);
+    if (detail.writingStyle) setTone(detail.writingStyle);
+    setReviewIssues(detail.reviewIssues);
+    setReviewSuggestions(detail.reviewSuggestions);
+    setValidationErrors(detail.validationErrors);
+    setLockVersion(detail.lockVersion);
+  }
+
+  function applyTurn(turn: {
+    currentStage: string | null;
+    clarificationQuestions: string[];
+    draft: AssistantDraft | null;
+    writingStyle: WritingStyle | null;
+    reviewIssues: string[];
+    reviewSuggestions: string[];
+    validationErrors: string[];
+    lockVersion: number;
+    state: string;
+    assistantMessage: AssistantMessage | null;
+  }) {
+    setStage(turn.currentStage);
+    setQuestions(turn.clarificationQuestions);
+    setDraft(turn.draft);
+    if (turn.draft) setDraftText(turn.draft.content);
+    if (turn.writingStyle) setTone(turn.writingStyle);
+    setReviewIssues(turn.reviewIssues);
+    setReviewSuggestions(turn.reviewSuggestions);
+    setValidationErrors(turn.validationErrors);
+    setLockVersion(turn.lockVersion);
+    if (turn.state === "unavailable" || turn.state === "error") {
+      setError(turn.assistantMessage?.content ?? "Assistant turn failed.");
+    }
+  }
 
   async function ensureThread(): Promise<string> {
     if (threadId) return threadId;
     const thread = await createAssistantThread({ timezone });
-    setThreadId(thread.id);
-    setMessages(thread.messages);
-    setDraft(thread.draft);
-    setDraftText(thread.draft?.content ?? "");
-    setQuestions(thread.clarificationQuestions);
+    applyThread(thread);
     return thread.id;
   }
 
@@ -77,11 +189,15 @@ export function AssistantWidget() {
     setBusy(true);
     try {
       const thread = await createAssistantThread({ timezone });
-      setThreadId(thread.id);
+      applyThread(thread);
       setMessages([]);
       setDraft(null);
       setDraftText("");
       setQuestions([]);
+      setReviewIssues([]);
+      setReviewSuggestions([]);
+      setValidationErrors([]);
+      setStage(null);
       setInput("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not start a conversation.");
@@ -97,6 +213,7 @@ export function AssistantWidget() {
     setBusy(true);
     setError(null);
     setInput("");
+    setStage("generating");
     try {
       const id = await ensureThread();
       const optimistic: AssistantMessage = {
@@ -106,25 +223,85 @@ export function AssistantWidget() {
         createdAt: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, optimistic]);
-      const turn = await postAssistantMessage(id, { content: text, timezone });
+      const turn = await postAssistantMessage(id, {
+        content: text,
+        timezone,
+        tone,
+        clientMessageId: newClientMessageId(),
+      });
       const refreshed = await getAssistantThread(id);
       setMessages(refreshed.messages);
-      setQuestions(turn.clarificationQuestions);
-      setDraft(turn.draft);
-      setDraftText(turn.draft?.content ?? draftText);
-      if (turn.state === "unavailable" || turn.state === "error") {
-        setError(turn.assistantMessage?.content ?? "Assistant turn failed.");
-      }
+      applyTurn(turn);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not send message.");
+      setStage("error");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleDraftAction(action: "regenerate" | "rewrite" | "set_tone", instruction?: string) {
+    if (!threadId || busy) return;
+    setBusy(true);
+    setError(null);
+    setStage(action === "regenerate" ? "writing" : "revising");
+    try {
+      const turn = await runAssistantDraftAction(threadId, {
+        action,
+        instruction,
+        tone: action === "set_tone" ? tone : undefined,
+        expectedVersion: draft?.version,
+        clientMessageId: newClientMessageId(),
+      });
+      const refreshed = await getAssistantThread(threadId);
+      setMessages(refreshed.messages);
+      applyTurn(turn);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update draft.");
+      setStage("error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSaveDraft() {
+    if (!threadId || !draft || busy) return;
+    if (draftText.trim() === draft.content) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await patchAssistantDraft(threadId, {
+        content: draftText.trim(),
+        expectedVersion: draft.version,
+        expectedLockVersion: lockVersion,
+      });
+      setDraft(updated);
+      setDraftText(updated.content);
+      setLockVersion((value) => value + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save draft edits.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCopy() {
+    const text = draftText || draft?.content || "";
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setError("Could not copy draft to clipboard.");
     }
   }
 
   if (!statusLoaded || signedOut) {
     return null;
   }
+
+  const stageLabel = stage ? STAGE_LABELS[stage] ?? stage.replaceAll("_", " ") : null;
 
   return (
     <>
@@ -141,16 +318,24 @@ export function AssistantWidget() {
 
       {open ? (
         <section
-          className="fixed inset-0 z-40 flex flex-col bg-background sm:inset-auto sm:bottom-5 sm:right-5 sm:h-[min(640px,calc(100svh-2.5rem))] sm:w-[min(420px,calc(100vw-2.5rem))] sm:rounded-xl sm:border sm:shadow-xl"
+          className="fixed inset-0 z-40 flex flex-col bg-background sm:inset-auto sm:bottom-5 sm:right-5 sm:h-[min(680px,calc(100svh-2.5rem))] sm:w-[min(440px,calc(100vw-2.5rem))] sm:rounded-xl sm:border sm:shadow-xl"
           aria-label="AI content assistant"
         >
           <header className="flex items-center justify-between border-b px-4 py-3">
             <div>
               <p className="text-sm font-semibold">AI content assistant</p>
-              <p className="text-xs text-muted-foreground">Drafts only — never auto-schedules</p>
+              <p className="text-xs text-muted-foreground">
+                {stageLabel ? `Stage: ${stageLabel}` : "Drafts only — never auto-schedules"}
+              </p>
             </div>
             <div className="flex items-center gap-2">
-              <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void handleNewConversation()}>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => void handleNewConversation()}
+              >
                 New
               </Button>
               <Button
@@ -192,6 +377,12 @@ export function AssistantWidget() {
               </div>
             ))}
 
+            {busy && stageLabel ? (
+              <p className="text-xs text-muted-foreground" aria-live="polite">
+                {stageLabel}…
+              </p>
+            ) : null}
+
             {questions.length > 0 ? (
               <div className="rounded-lg border border-dashed border-border px-3 py-2 text-sm">
                 <p className="mb-1 font-medium">Follow-up questions</p>
@@ -200,6 +391,24 @@ export function AssistantWidget() {
                     <li key={q}>{q}</li>
                   ))}
                 </ul>
+              </div>
+            ) : null}
+
+            {reviewIssues.length > 0 || validationErrors.length > 0 ? (
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm">
+                <p className="mb-1 font-medium">Review notes</p>
+                <ul className="list-disc space-y-1 pl-4 text-muted-foreground">
+                  {[...reviewIssues, ...validationErrors].slice(0, 6).map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+                {reviewSuggestions.length > 0 ? (
+                  <ul className="mt-2 list-disc space-y-1 pl-4 text-muted-foreground">
+                    {reviewSuggestions.slice(0, 4).map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                ) : null}
               </div>
             ) : null}
 
@@ -217,6 +426,71 @@ export function AssistantWidget() {
                   onChange={(event) => setDraftText(event.target.value)}
                   aria-label="Editable draft content"
                 />
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    Tone
+                    <select
+                      className="rounded-md border border-input bg-background px-2 py-1 text-xs"
+                      value={tone}
+                      disabled={busy}
+                      onChange={(event) => setTone(event.target.value as WritingStyle)}
+                    >
+                      {TONES.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => void handleDraftAction("set_tone")}
+                  >
+                    Apply tone
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() =>
+                      void handleDraftAction("rewrite", "Make it shorter and more professional.")
+                    }
+                  >
+                    Rewrite shorter
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => void handleDraftAction("regenerate")}
+                  >
+                    <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                    Regenerate
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => void handleCopy()}
+                  >
+                    <Copy className="mr-1 h-3.5 w-3.5" />
+                    {copied ? "Copied" : "Copy"}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={busy || draftText.trim() === draft.content}
+                    onClick={() => void handleSaveDraft()}
+                  >
+                    Save edits
+                  </Button>
+                </div>
               </div>
             ) : null}
 
@@ -242,7 +516,7 @@ export function AssistantWidget() {
               onChange={(event) => setInput(event.target.value)}
             />
             <Button type="submit" className="w-full" disabled={busy || input.trim().length === 0}>
-              {busy ? "Thinking…" : "Send"}
+              {busy ? "Working…" : "Send"}
             </Button>
           </form>
         </section>

@@ -1,4 +1,4 @@
-"""Phase 5A assistant service — conversation + drafting only (no PostService writes)."""
+"""Phase 5A/5B assistant service — conversation + drafting only (no PostService writes)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 
 import structlog
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.assistant.graph import (
@@ -19,7 +20,7 @@ from app.assistant.llm.factory import build_llm_provider
 from app.assistant.rate_limit import get_assistant_rate_limiter
 from app.assistant.schemas import GraphSnapshot
 from app.core.config import Settings
-from app.core.errors import NotFoundError, UnprocessableError
+from app.core.errors import NotFoundError, UnprocessableError, VersionConflictError
 from app.models import AgentDraft, AgentMessage, AgentThread, User
 from app.models.enums import (
     AgentDraftStatus,
@@ -28,6 +29,7 @@ from app.models.enums import (
     AssistantResponseState,
 )
 from app.schemas.assistant import (
+    AssistantDraftAction,
     AssistantDraftResponse,
     AssistantMessageResponse,
     AssistantStatusResponse,
@@ -35,6 +37,7 @@ from app.schemas.assistant import (
     AssistantThreadSummary,
     AssistantTurnResponse,
     CreateAssistantThread,
+    PatchAssistantDraft,
     PostAssistantMessage,
 )
 
@@ -87,6 +90,7 @@ class AssistantService:
             user_id=user.id,
             status=AgentThreadStatus.ACTIVE.value,
             title=payload.title,
+            lock_version=0,
             graph_state=dict(
                 empty_state(thread_id=thread_id, user_id=user.id, timezone=payload.timezone)
             ),
@@ -120,26 +124,14 @@ class AssistantService:
                     created_at=thread.created_at,
                     updated_at=thread.updated_at,
                     response_state=state.get("response_state"),
+                    current_stage=state.get("current_stage"),
                 )
             )
         return summaries
 
     async def get_thread(self, *, user: User, thread_id: UUID) -> AssistantThreadDetail:
         thread = await self._require_thread(user_id=user.id, thread_id=thread_id)
-        draft = self._latest_draft(thread)
-        state = thread.graph_state or {}
-        return AssistantThreadDetail(
-            id=thread.id,
-            status=thread.status,
-            title=thread.title,
-            created_at=thread.created_at,
-            updated_at=thread.updated_at,
-            messages=[self._message_response(m) for m in thread.messages],
-            draft=self._draft_response(draft) if draft else None,
-            clarification_questions=list(state.get("clarification_questions") or []),
-            response_state=state.get("response_state") or AssistantResponseState.GENERATING.value,
-            assistant_ready=self._settings.ai_ready,
-        )
+        return self._thread_detail(thread)
 
     async def get_draft(self, *, user: User, thread_id: UUID) -> AssistantDraftResponse:
         thread = await self._require_thread(user_id=user.id, thread_id=thread_id)
@@ -162,71 +154,257 @@ class AssistantService:
 
         get_assistant_rate_limiter(self._settings.ai_rate_limit_per_minute).check(user.id)
 
+        thread = await self._lock_thread(user_id=user.id, thread_id=thread_id)
+
+        if payload.client_message_id is not None:
+            replay = await self._replay_if_duplicate(
+                thread=thread, client_message_id=payload.client_message_id
+            )
+            if replay is not None:
+                return replay
+
         status = self.status()
         if not status.ai_ready:
-            thread = await self._require_thread(user_id=user.id, thread_id=thread_id)
-            now = datetime.now(UTC)
-            user_msg = AgentMessage(
-                id=uuid4(),
-                thread_id=thread.id,
-                role=AgentMessageRole.USER.value,
+            return await self._persist_unavailable_turn(
+                thread=thread,
                 content=payload.content,
-                created_at=now,
-            )
-            assistant_msg = AgentMessage(
-                id=uuid4(),
-                thread_id=thread.id,
-                role=AgentMessageRole.ASSISTANT.value,
-                content=status.message,
-                created_at=now,
-            )
-            self._db.add_all([user_msg, assistant_msg])
-            thread.updated_at = now
-            graph = dict(thread.graph_state or {})
-            graph["response_state"] = AssistantResponseState.UNAVAILABLE.value
-            graph["assistant_reply"] = status.message
-            thread.graph_state = graph
-            await self._db.commit()
-            return AssistantTurnResponse(
-                thread_id=thread.id,
-                state=AssistantResponseState.UNAVAILABLE.value,
-                assistant_message=self._message_response(assistant_msg),
-                clarification_questions=[],
-                draft=None,
+                client_message_id=payload.client_message_id,
+                message=status.message,
             )
 
-        thread = await self._require_thread(user_id=user.id, thread_id=thread_id)
         now = datetime.now(UTC)
         user_msg = AgentMessage(
             id=uuid4(),
             thread_id=thread.id,
             role=AgentMessageRole.USER.value,
             content=payload.content,
+            client_message_id=payload.client_message_id,
             created_at=now,
         )
         self._db.add(user_msg)
+        try:
+            await self._db.flush()
+        except IntegrityError as exc:
+            await self._db.rollback()
+            thread = await self._lock_thread(user_id=user.id, thread_id=thread_id)
+            replay = await self._replay_if_duplicate(
+                thread=thread, client_message_id=payload.client_message_id
+            )
+            if replay is not None:
+                return replay
+            raise UnprocessableError("Could not accept message.") from exc
 
-        # Bound history in DB (keep newest N including this message after commit).
-        prior = list(thread.messages)
-        overflow = len(prior) + 1 - self._settings.ai_max_history_messages
-        if overflow > 0:
-            for old in prior[:overflow]:
-                await self._db.delete(old)
+        await self._trim_history(thread)
 
-        base_state = state_from_snapshot(thread.graph_state or empty_state(
-            thread_id=thread.id, user_id=user.id, timezone=payload.timezone
-        ))
+        base_state = state_from_snapshot(
+            thread.graph_state
+            or empty_state(thread_id=thread.id, user_id=user.id, timezone=payload.timezone)
+        )
         if payload.timezone:
             base_state["timezone"] = payload.timezone
+        if payload.tone:
+            base_state["writing_style"] = payload.tone
         base_state["last_user_message"] = payload.content
         base_state["thread_id"] = str(thread.id)
         base_state["user_id"] = str(user.id)
+        # Never carry secrets into the graph — ownership ids only.
+        prior_snapshot = snapshot_from_state(base_state)
+        prior_dump = prior_snapshot.model_dump(mode="json")
+
+        llm = build_llm_provider(self._settings)
+        try:
+            final_state = await run_assistant_turn(
+                llm=llm, settings=self._settings, state=base_state
+            )
+        except Exception:
+            # Unexpected failures: restore prior graph snapshot and surface a safe error.
+            thread.graph_state = prior_dump
+            thread.lock_version = int(thread.lock_version or 0) + 1
+            thread.updated_at = datetime.now(UTC)
+            assistant_msg = AgentMessage(
+                id=uuid4(),
+                thread_id=thread.id,
+                role=AgentMessageRole.ASSISTANT.value,
+                content="The assistant hit an unexpected error. Your prior draft was preserved.",
+                created_at=datetime.now(UTC),
+            )
+            self._db.add(assistant_msg)
+            await self._db.commit()
+            logger.exception(
+                "assistant.turn_unexpected_error",
+                thread_id=str(thread.id),
+                user_id=str(user.id),
+            )
+            return AssistantTurnResponse(
+                thread_id=thread.id,
+                state=AssistantResponseState.ERROR.value,
+                current_stage="error",
+                assistant_message=self._message_response(assistant_msg),
+                clarification_questions=[],
+                draft=self._draft_response(self._latest_draft(thread))
+                if self._latest_draft(thread)
+                else None,
+                lock_version=thread.lock_version,
+                validation_errors=["unexpected_error"],
+            )
+
+        return await self._finalize_turn(
+            thread=thread, final_state=final_state, title_seed=payload.content
+        )
+
+    async def apply_draft_action(
+        self,
+        *,
+        user: User,
+        thread_id: UUID,
+        payload: AssistantDraftAction,
+    ) -> AssistantTurnResponse:
+        get_assistant_rate_limiter(self._settings.ai_rate_limit_per_minute).check(user.id)
+        thread = await self._lock_thread(user_id=user.id, thread_id=thread_id)
+
+        if payload.client_message_id is not None:
+            replay = await self._replay_if_duplicate(
+                thread=thread, client_message_id=payload.client_message_id
+            )
+            if replay is not None:
+                return replay
+
+        status = self.status()
+        if not status.ai_ready:
+            raise UnprocessableError(status.message)
+
+        draft = self._latest_draft(thread)
+        if draft is None and payload.action != "regenerate":
+            raise UnprocessableError("No draft exists to revise yet.")
+        if (
+            payload.expected_version is not None
+            and draft is not None
+            and draft.version != payload.expected_version
+        ):
+            raise VersionConflictError(
+                "Draft was updated elsewhere. Refresh and try again."
+            )
+
+        instruction = payload.instruction
+        if payload.action == "regenerate":
+            instruction = instruction or "Regenerate the LinkedIn draft from confirmed facts."
+            entry = "writing"
+        elif payload.action == "set_tone":
+            if not payload.tone:
+                raise UnprocessableError("tone is required for set_tone.")
+            instruction = instruction or f"Rewrite the draft in a {payload.tone} tone."
+            entry = "revise"
+        else:
+            if not instruction:
+                raise UnprocessableError("instruction is required for rewrite.")
+            entry = "revise"
+
+        synthetic = instruction or payload.action
+        now = datetime.now(UTC)
+        user_msg = AgentMessage(
+            id=uuid4(),
+            thread_id=thread.id,
+            role=AgentMessageRole.USER.value,
+            content=synthetic,
+            client_message_id=payload.client_message_id,
+            created_at=now,
+        )
+        self._db.add(user_msg)
+        try:
+            await self._db.flush()
+        except IntegrityError as exc:
+            await self._db.rollback()
+            thread = await self._lock_thread(user_id=user.id, thread_id=thread_id)
+            replay = await self._replay_if_duplicate(
+                thread=thread, client_message_id=payload.client_message_id
+            )
+            if replay is not None:
+                return replay
+            raise UnprocessableError("Could not accept draft action.") from exc
+
+        base_state = state_from_snapshot(
+            thread.graph_state or empty_state(thread_id=thread.id, user_id=user.id)
+        )
+        if payload.tone:
+            base_state["writing_style"] = payload.tone
+        base_state["refine_instruction"] = instruction
+        base_state["last_user_message"] = synthetic
+        base_state["intent_type"] = "refine_draft"
+        base_state["thread_id"] = str(thread.id)
+        base_state["user_id"] = str(user.id)
+        if entry == "writing":
+            # Regenerate from facts; keep prior draft until writing succeeds.
+            pass
 
         llm = build_llm_provider(self._settings)
         final_state = await run_assistant_turn(
-            llm=llm, settings=self._settings, state=base_state
+            llm=llm, settings=self._settings, state=base_state, entry=entry
         )
+        return await self._finalize_turn(thread=thread, final_state=final_state, title_seed=None)
 
+    async def patch_draft(
+        self,
+        *,
+        user: User,
+        thread_id: UUID,
+        payload: PatchAssistantDraft,
+    ) -> AssistantDraftResponse:
+        thread = await self._lock_thread(user_id=user.id, thread_id=thread_id)
+        draft = self._latest_draft(thread)
+        if draft is None:
+            raise NotFoundError("No draft exists for this thread yet.")
+        if draft.version != payload.expected_version:
+            raise VersionConflictError(
+                "Draft was updated elsewhere. Refresh and try again."
+            )
+        if (
+            payload.expected_lock_version is not None
+            and int(thread.lock_version or 0) != payload.expected_lock_version
+        ):
+            raise VersionConflictError(
+                "Thread was updated elsewhere. Refresh and try again."
+            )
+
+        # Manual edit: supersede prior draft row with a new version (optimistic concurrency).
+        draft.status = AgentDraftStatus.SUPERSEDED.value
+        now = datetime.now(UTC)
+        new_draft = AgentDraft(
+            id=uuid4(),
+            thread_id=thread.id,
+            content=payload.content,
+            category=draft.category,
+            confirmed_facts=dict(draft.confirmed_facts or {}),
+            suggested_details=dict(draft.suggested_details or {}),
+            assumptions=dict(draft.assumptions or {})
+            if isinstance(draft.assumptions, dict)
+            else {"items": draft.assumptions},
+            proposed_scheduled_at=draft.proposed_scheduled_at,
+            timezone=draft.timezone,
+            status=AgentDraftStatus.DRAFT.value,
+            version=draft.version + 1,
+            created_at=now,
+            updated_at=now,
+        )
+        self._db.add(new_draft)
+
+        graph = dict(thread.graph_state or {})
+        graph["draft_content"] = payload.content
+        graph["response_state"] = AssistantResponseState.DRAFT_READY.value
+        graph["current_stage"] = "draft_ready"
+        thread.graph_state = graph
+        thread.lock_version = int(thread.lock_version or 0) + 1
+        thread.updated_at = now
+        await self._db.commit()
+        await self._db.refresh(new_draft)
+        return self._draft_response(new_draft)
+
+    async def _finalize_turn(
+        self,
+        *,
+        thread: AgentThread,
+        final_state: dict,
+        title_seed: str | None,
+    ) -> AssistantTurnResponse:
         reply_text = final_state.get("assistant_reply") or "I could not complete that turn."
         assistant_msg = AgentMessage(
             id=uuid4(),
@@ -237,11 +415,12 @@ class AssistantService:
         )
         self._db.add(assistant_msg)
 
-        snapshot = snapshot_from_state(final_state)
+        snapshot = snapshot_from_state(final_state)  # type: ignore[arg-type]
         thread.graph_state = snapshot.model_dump(mode="json")
+        thread.lock_version = int(thread.lock_version or 0) + 1
         thread.updated_at = datetime.now(UTC)
-        if not thread.title:
-            thread.title = payload.content.strip()[:80]
+        if title_seed and not thread.title:
+            thread.title = title_seed.strip()[:80]
 
         draft_response = None
         if final_state.get("response_state") == AssistantResponseState.DRAFT_READY.value:
@@ -253,7 +432,7 @@ class AssistantService:
         logger.info(
             "assistant.turn_complete",
             thread_id=str(thread.id),
-            user_id=str(user.id),
+            user_id=str(thread.user_id),
             state=final_state.get("response_state"),
             stage=final_state.get("current_stage"),
         )
@@ -261,17 +440,65 @@ class AssistantService:
         return AssistantTurnResponse(
             thread_id=thread.id,
             state=final_state.get("response_state") or AssistantResponseState.ERROR.value,
+            current_stage=final_state.get("current_stage"),
             assistant_message=self._message_response(assistant_msg),
             clarification_questions=list(final_state.get("clarification_questions") or []),
             draft=draft_response,
             proposed_scheduled_at=snapshot.proposed_scheduled_at,
             timezone=snapshot.timezone,
+            writing_style=snapshot.writing_style,
+            review_issues=list(snapshot.review_issues),
+            review_suggestions=list(snapshot.review_suggestions),
+            validation_errors=list(snapshot.validation_errors),
+            lock_version=thread.lock_version,
+        )
+
+    async def _persist_unavailable_turn(
+        self,
+        *,
+        thread: AgentThread,
+        content: str,
+        client_message_id: UUID | None,
+        message: str,
+    ) -> AssistantTurnResponse:
+        now = datetime.now(UTC)
+        user_msg = AgentMessage(
+            id=uuid4(),
+            thread_id=thread.id,
+            role=AgentMessageRole.USER.value,
+            content=content,
+            client_message_id=client_message_id,
+            created_at=now,
+        )
+        assistant_msg = AgentMessage(
+            id=uuid4(),
+            thread_id=thread.id,
+            role=AgentMessageRole.ASSISTANT.value,
+            content=message,
+            created_at=now,
+        )
+        self._db.add_all([user_msg, assistant_msg])
+        graph = dict(thread.graph_state or {})
+        graph["response_state"] = AssistantResponseState.UNAVAILABLE.value
+        graph["assistant_reply"] = message
+        graph["current_stage"] = "error"
+        thread.graph_state = graph
+        thread.lock_version = int(thread.lock_version or 0) + 1
+        thread.updated_at = now
+        await self._db.commit()
+        return AssistantTurnResponse(
+            thread_id=thread.id,
+            state=AssistantResponseState.UNAVAILABLE.value,
+            current_stage="error",
+            assistant_message=self._message_response(assistant_msg),
+            clarification_questions=[],
+            draft=None,
+            lock_version=thread.lock_version,
         )
 
     async def _persist_draft(
         self, *, thread: AgentThread, snapshot: GraphSnapshot
     ) -> AssistantDraftResponse:
-        # Supersede previous active drafts.
         for existing in thread.drafts:
             if existing.status == AgentDraftStatus.DRAFT.value:
                 existing.status = AgentDraftStatus.SUPERSEDED.value
@@ -283,7 +510,11 @@ class AssistantService:
             content=snapshot.draft_content or "",
             category=snapshot.post_category,
             confirmed_facts=dict(snapshot.confirmed_facts),
-            suggested_details={"hashtags": list(snapshot.suggested_hashtags)},
+            suggested_details={
+                "hashtags": list(snapshot.suggested_hashtags),
+                "skills": list(snapshot.suggested_skills),
+                "responsibilities": list(snapshot.suggested_responsibilities),
+            },
             assumptions={"items": list(snapshot.assumptions)},
             proposed_scheduled_at=snapshot.proposed_scheduled_at,
             timezone=snapshot.timezone,
@@ -294,7 +525,17 @@ class AssistantService:
         )
         self._db.add(draft)
         await self._db.flush()
+        thread.drafts.append(draft)
         return self._draft_response(draft)
+
+    async def _lock_thread(self, *, user_id: UUID, thread_id: UUID) -> AgentThread:
+        result = await self._db.execute(
+            select(AgentThread).where(AgentThread.id == thread_id).with_for_update()
+        )
+        thread = result.scalar_one_or_none()
+        if thread is None or thread.user_id != user_id:
+            raise NotFoundError("Assistant thread not found.")
+        return thread
 
     async def _require_thread(self, *, user_id: UUID, thread_id: UUID) -> AgentThread:
         result = await self._db.execute(
@@ -302,9 +543,83 @@ class AssistantService:
         )
         thread = result.scalar_one_or_none()
         if thread is None or thread.user_id != user_id:
-            # Same message for missing vs other-user — do not leak ownership.
             raise NotFoundError("Assistant thread not found.")
         return thread
+
+    async def _trim_history(self, thread: AgentThread) -> None:
+        prior = list(thread.messages)
+        overflow = len(prior) + 1 - self._settings.ai_max_history_messages
+        if overflow > 0:
+            for old in prior[:overflow]:
+                await self._db.delete(old)
+
+    async def _replay_if_duplicate(
+        self, *, thread: AgentThread, client_message_id: UUID | None
+    ) -> AssistantTurnResponse | None:
+        if client_message_id is None:
+            return None
+        existing = next(
+            (
+                m
+                for m in thread.messages
+                if m.client_message_id == client_message_id
+                and m.role == AgentMessageRole.USER.value
+            ),
+            None,
+        )
+        if existing is None:
+            return None
+        # Find the next assistant message after this user turn.
+        assistant = next(
+            (
+                m
+                for m in thread.messages
+                if m.role == AgentMessageRole.ASSISTANT.value
+                and m.created_at >= existing.created_at
+                and m.id != existing.id
+            ),
+            None,
+        )
+        state = thread.graph_state or {}
+        draft = self._latest_draft(thread)
+        return AssistantTurnResponse(
+            thread_id=thread.id,
+            state=state.get("response_state") or AssistantResponseState.DRAFT_READY.value,
+            current_stage=state.get("current_stage"),
+            assistant_message=self._message_response(assistant) if assistant else None,
+            clarification_questions=list(state.get("clarification_questions") or []),
+            draft=self._draft_response(draft) if draft else None,
+            proposed_scheduled_at=None,
+            timezone=state.get("timezone"),
+            writing_style=state.get("writing_style"),
+            review_issues=list(state.get("review_issues") or []),
+            review_suggestions=list(state.get("review_suggestions") or []),
+            validation_errors=list(state.get("validation_errors") or []),
+            lock_version=int(thread.lock_version or 0),
+            idempotent_replay=True,
+        )
+
+    def _thread_detail(self, thread: AgentThread) -> AssistantThreadDetail:
+        draft = self._latest_draft(thread)
+        state = thread.graph_state or {}
+        return AssistantThreadDetail(
+            id=thread.id,
+            status=thread.status,
+            title=thread.title,
+            created_at=thread.created_at,
+            updated_at=thread.updated_at,
+            messages=[self._message_response(m) for m in thread.messages],
+            draft=self._draft_response(draft) if draft else None,
+            clarification_questions=list(state.get("clarification_questions") or []),
+            response_state=state.get("response_state") or AssistantResponseState.GENERATING.value,
+            current_stage=state.get("current_stage"),
+            writing_style=state.get("writing_style"),
+            review_issues=list(state.get("review_issues") or []),
+            review_suggestions=list(state.get("review_suggestions") or []),
+            validation_errors=list(state.get("validation_errors") or []),
+            lock_version=int(thread.lock_version or 0),
+            assistant_ready=self._settings.ai_ready,
+        )
 
     @staticmethod
     def _latest_draft(thread: AgentThread) -> AgentDraft | None:

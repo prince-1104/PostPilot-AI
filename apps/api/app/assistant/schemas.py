@@ -1,4 +1,4 @@
-"""Structured LLM I/O and graph-facing Pydantic models for Phase 5A."""
+"""Structured LLM I/O and graph-facing Pydantic models for Phase 5A/5B."""
 
 from __future__ import annotations
 
@@ -24,11 +24,21 @@ IntentType = Literal[
     "unsupported",
 ]
 
+WritingStyle = Literal[
+    "professional",
+    "conversational",
+    "concise",
+    "detailed",
+    "promotional",
+]
+
 AssistantStage = Literal[
     "intent",
     "requirements",
     "awaiting_user",
     "writing",
+    "reviewing",
+    "revising",
     "validating",
     "draft_ready",
     "error",
@@ -44,6 +54,8 @@ class IntentResult(BaseModel):
     requested_schedule_text: str | None = None
     missing_hints: list[str] = Field(default_factory=list)
     injection_attempt: bool = False
+    writing_style: WritingStyle | None = None
+    refine_instruction: str | None = None
     notes: str | None = None
 
 
@@ -66,6 +78,8 @@ class WritingResult(BaseModel):
     assumptions: list[str] = Field(default_factory=list)
     missing_information: list[str] = Field(default_factory=list)
     quality_warnings: list[str] = Field(default_factory=list)
+    suggested_skills: list[str] = Field(default_factory=list)
+    suggested_responsibilities: list[str] = Field(default_factory=list)
 
     @field_validator("suggested_hashtags")
     @classmethod
@@ -78,7 +92,25 @@ class WritingResult(BaseModel):
             if not t.startswith("#"):
                 t = f"#{t}"
             cleaned.append(t[:64])
-        return cleaned[:12]
+        return cleaned[:8]
+
+    @field_validator("suggested_skills", "suggested_responsibilities")
+    @classmethod
+    def _trim_suggestions(cls, value: list[str]) -> list[str]:
+        return [item.strip()[:200] for item in value if item and item.strip()][:12]
+
+
+class ReviewResult(BaseModel):
+    """Advisory LLM review — never treated as ground-truth verification."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    passed: bool
+    issues: list[str] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)
+    unsupported_claims: list[str] = Field(default_factory=list)
+    missing_required_facts: list[str] = Field(default_factory=list)
+    proposed_revision: str | None = None
 
 
 class GraphSnapshot(BaseModel):
@@ -99,7 +131,17 @@ class GraphSnapshot(BaseModel):
     timezone: str | None = None
     draft_content: str | None = None
     suggested_hashtags: list[str] = Field(default_factory=list)
+    suggested_skills: list[str] = Field(default_factory=list)
+    suggested_responsibilities: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
+    writing_style: WritingStyle = "professional"
+    refine_instruction: str | None = None
+    review_passed: bool | None = None
+    review_issues: list[str] = Field(default_factory=list)
+    review_suggestions: list[str] = Field(default_factory=list)
+    unsupported_claims: list[str] = Field(default_factory=list)
+    auto_revision_count: int = 0
+    llm_calls_this_turn: int = 0
     current_stage: AssistantStage = "intent"
     validation_errors: list[str] = Field(default_factory=list)
     last_user_message: str | None = None

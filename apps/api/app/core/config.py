@@ -127,7 +127,7 @@ class Settings(BaseSettings):
     publish_dispatcher_interval_seconds: int = Field(default=15, ge=5, le=300)
     publish_recovery_interval_seconds: int = Field(default=30, ge=5, le=600)
 
-    # Phase 5A conversational AI assistant (drafting only — never schedules/publishes).
+    # Phase 5A/5B conversational AI assistant (drafting only — never schedules/publishes).
     ai_enabled: bool = False
     ai_provider: AiProvider = "openai"
     openai_api_key: SecretStr | None = None
@@ -136,6 +136,8 @@ class Settings(BaseSettings):
     ai_max_user_message_chars: int = Field(default=4000, ge=100, le=20_000)
     ai_max_history_messages: int = Field(default=40, ge=4, le=200)
     ai_rate_limit_per_minute: int = Field(default=20, ge=1, le=600)
+    ai_max_llm_calls_per_turn: int = Field(default=8, ge=2, le=20)
+    ai_llm_max_retries: int = Field(default=1, ge=0, le=3)
 
     @field_validator(
         "postgres_password",

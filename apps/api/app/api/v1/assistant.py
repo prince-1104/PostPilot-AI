@@ -1,4 +1,4 @@
-"""Authenticated AI assistant routes (Phase 5A — drafting only)."""
+"""Authenticated AI assistant routes (Phase 5A/5B — drafting only)."""
 
 from uuid import UUID
 
@@ -6,12 +6,14 @@ from fastapi import APIRouter
 
 from app.api.deps import CurrentUserDep, RequireOriginDep, SessionDep, SettingsDep
 from app.schemas.assistant import (
+    AssistantDraftAction,
     AssistantDraftResponse,
     AssistantStatusResponse,
     AssistantThreadDetail,
     AssistantThreadSummary,
     AssistantTurnResponse,
     CreateAssistantThread,
+    PatchAssistantDraft,
     PostAssistantMessage,
 )
 from app.services.assistant import AssistantService
@@ -89,4 +91,35 @@ async def get_draft(
 ) -> AssistantDraftResponse:
     return await AssistantService(session, settings=settings).get_draft(
         user=user, thread_id=thread_id
+    )
+
+
+@router.patch("/threads/{thread_id}/draft", response_model=AssistantDraftResponse)
+async def patch_draft(
+    thread_id: UUID,
+    body: PatchAssistantDraft,
+    user: CurrentUserDep,
+    session: SessionDep,
+    settings: SettingsDep,
+    _: RequireOriginDep,
+) -> AssistantDraftResponse:
+    return await AssistantService(session, settings=settings).patch_draft(
+        user=user, thread_id=thread_id, payload=body
+    )
+
+
+@router.post(
+    "/threads/{thread_id}/draft/actions",
+    response_model=AssistantTurnResponse,
+)
+async def draft_action(
+    thread_id: UUID,
+    body: AssistantDraftAction,
+    user: CurrentUserDep,
+    session: SessionDep,
+    settings: SettingsDep,
+    _: RequireOriginDep,
+) -> AssistantTurnResponse:
+    return await AssistantService(session, settings=settings).apply_draft_action(
+        user=user, thread_id=thread_id, payload=body
     )

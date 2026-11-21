@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TypeVar
 
 import structlog
@@ -39,6 +40,39 @@ class OpenAILLMProvider(LLMProvider):
         user: str,
         schema: type[T],
     ) -> T:
+        attempts = 1 + max(0, self._settings.ai_llm_max_retries)
+        last_error: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                return await self._parse_once(system=system, user=user, schema=schema)
+            except LLMError as exc:
+                # Do not retry rate limits, refusals, or invalid structured output.
+                if exc.code in {"llm_rate_limited", "llm_refusal", "llm_invalid_output"}:
+                    raise
+                last_error = exc
+                if attempt + 1 >= attempts:
+                    raise
+                await asyncio.sleep(0.25 * (attempt + 1))
+            except (APITimeoutError, APIConnectionError) as exc:
+                last_error = exc
+                if attempt + 1 >= attempts:
+                    code = "llm_timeout" if isinstance(exc, APITimeoutError) else "llm_unavailable"
+                    message = (
+                        "The AI provider timed out. Try again shortly."
+                        if code == "llm_timeout"
+                        else "Could not reach the AI provider."
+                    )
+                    raise LLMError(message, code=code) from exc
+                await asyncio.sleep(0.25 * (attempt + 1))
+        raise LLMError("The AI provider failed.", code="llm_error") from last_error
+
+    async def _parse_once(
+        self,
+        *,
+        system: str,
+        user: str,
+        schema: type[T],
+    ) -> T:
         try:
             completion = await self._client.beta.chat.completions.parse(
                 model=self._settings.ai_model,
@@ -54,16 +88,10 @@ class OpenAILLMProvider(LLMProvider):
                 "The AI provider is rate-limiting requests. Try again shortly.",
                 code="llm_rate_limited",
             ) from exc
-        except APITimeoutError as exc:
-            raise LLMError(
-                "The AI provider timed out. Try again shortly.",
-                code="llm_timeout",
-            ) from exc
-        except APIConnectionError as exc:
-            raise LLMError(
-                "Could not reach the AI provider.",
-                code="llm_unavailable",
-            ) from exc
+        except APITimeoutError:
+            raise
+        except APIConnectionError:
+            raise
         except APIStatusError as exc:
             logger.warning(
                 "assistant.llm.provider_status",
