@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 
 import { PostDetail } from "@/components/posts/post-detail";
+import { PageHeader } from "@/components/ui/page-header";
+import { Skeleton } from "@/components/ui/skeleton-loader";
 
 export const metadata: Metadata = {
   title: { absolute: "Post · PostPilot AI" },
@@ -19,13 +21,12 @@ export default function PostDetailPage({
 }) {
   return (
     <div className="flex flex-col gap-8">
-      <header className="flex flex-col gap-2">
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">Post details</h1>
-        <p className="max-w-2xl text-muted-foreground">
-          Review status, edit or reschedule while the post is still scheduled, or cancel it.
-        </p>
-      </header>
-      <Suspense fallback={<p className="text-sm text-muted-foreground">Loading post…</p>}>
+      <PageHeader
+        eyebrow="Publishing"
+        title="Post details"
+        description="Review status, edit or reschedule while the post is still scheduled, or cancel it."
+      />
+      <Suspense fallback={<Skeleton className="h-48 w-full rounded-2xl" />}>
         <PostDetailBody params={params} />
       </Suspense>
     </div>

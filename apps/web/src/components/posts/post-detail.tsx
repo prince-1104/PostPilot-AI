@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { PostStatusBadge } from "@/components/posts/post-status-badge";
+import { ScheduleDateTimePicker } from "@/components/posts/schedule-datetime-picker";
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api/client";
 import {
@@ -231,7 +232,7 @@ export function PostDetail({ postId }: { postId: string }) {
 
       {post.connectionExpiryWarning ? (
         <p
-          className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-100"
+          className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber"
           role="status"
         >
           {post.connectionExpiryWarning}
@@ -246,7 +247,7 @@ export function PostDetail({ postId }: { postId: string }) {
             {post.publishApproved ? (
               <span className="text-emerald-800 dark:text-emerald-200">approved</span>
             ) : (
-              <span className="text-amber-800 dark:text-amber-200">not approved</span>
+              <span className="text-amber">not approved</span>
             )}
             {post.publishApprovedAt
               ? ` · ${formatInTimezone(post.publishApprovedAt, post.timezone)}`
@@ -276,7 +277,7 @@ export function PostDetail({ postId }: { postId: string }) {
 
       {post.status === "requires_review" ? (
         <p
-          className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-100"
+          className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber"
           role="status"
         >
           This post requires review. It will not automatically republish. Inspect attempt history
@@ -303,36 +304,32 @@ export function PostDetail({ postId }: { postId: string }) {
               onChange={(event) => setContent(event.target.value)}
             />
           </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="flex flex-col gap-2">
-              <label htmlFor="edit-when" className="text-sm font-medium">
-                Local date and time
-              </label>
-              <input
-                id="edit-when"
-                type="datetime-local"
-                className={fieldClass}
-                value={localWhen}
-                onChange={(event) => setLocalWhen(event.target.value)}
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <label htmlFor="edit-tz" className="text-sm font-medium">
-                Timezone
-              </label>
-              <select
-                id="edit-tz"
-                className={fieldClass}
-                value={timezone}
-                onChange={(event) => setTimezone(event.target.value)}
-              >
-                {timezones.map((zone) => (
-                  <option key={zone} value={zone}>
-                    {zone}
-                  </option>
-                ))}
-              </select>
-            </div>
+          <div className="flex flex-col gap-2">
+            <p className="text-sm font-medium">When to publish</p>
+            <ScheduleDateTimePicker
+              id="edit-when"
+              value={localWhen}
+              timeZone={timezone}
+              onChange={setLocalWhen}
+              disabled={busy}
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <label htmlFor="edit-tz" className="text-sm font-medium">
+              Timezone
+            </label>
+            <select
+              id="edit-tz"
+              className={fieldClass}
+              value={timezone}
+              onChange={(event) => setTimezone(event.target.value)}
+            >
+              {timezones.map((zone) => (
+                <option key={zone} value={zone}>
+                  {zone}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button type="button" disabled={busy} onClick={() => void handleSave()}>
@@ -453,7 +450,7 @@ export function PostDetail({ postId }: { postId: string }) {
 
       {post.status === "requires_review" ? (
         <p
-          className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-100"
+          className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber"
           role="status"
         >
           This post needs manual review. The LinkedIn API call may already have created the post,

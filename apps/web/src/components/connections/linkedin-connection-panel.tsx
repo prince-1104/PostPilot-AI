@@ -170,7 +170,7 @@ export function LinkedInConnectionPanel() {
     <div className="flex flex-col gap-6">
       {oauthStatus === "success" ? (
         <p
-          className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-900 dark:text-emerald-100"
+          className="rounded-xl border border-emerald/30 bg-emerald/10 px-4 py-3 text-sm text-emerald"
           role="status"
         >
           LinkedIn connection completed successfully.
@@ -178,16 +178,21 @@ export function LinkedInConnectionPanel() {
       ) : null}
       {oauthStatus === "error" ? (
         <p
-          className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+          className="rounded-xl border border-rose/30 bg-rose/10 px-4 py-3 text-sm text-rose"
           role="alert"
         >
           {oauthReason ?? "LinkedIn authorization failed."}
         </p>
       ) : null}
 
-      <Card>
+      <Card className="max-w-2xl border-border/80 bg-card/80 ring-border/60 backdrop-blur-md">
         <CardHeader>
-          <CardTitle>LinkedIn account</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <span className="flex size-9 items-center justify-center rounded-xl bg-electric-blue/15 text-sm font-bold text-electric-blue">
+              in
+            </span>
+            LinkedIn account
+          </CardTitle>
           <CardDescription>
             Connect the LinkedIn identity PostPilot uses for sign-in and scheduled text publishing.
             OAuth success alone does not mean publishing has been verified.

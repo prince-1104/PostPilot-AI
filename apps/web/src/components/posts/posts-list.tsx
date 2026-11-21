@@ -2,9 +2,12 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Plus } from "lucide-react";
+import { Plus, RefreshCw } from "lucide-react";
 
 import { PostStatusBadge } from "@/components/posts/post-status-badge";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PremiumCard } from "@/components/ui/premium-card";
+import { Skeleton } from "@/components/ui/skeleton-loader";
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api/client";
 import {
@@ -27,7 +30,7 @@ const STATUS_FILTERS: Array<{ value: "" | PostStatus; label: string }> = [
 
 const POLL_MS = 5000;
 
-function preview(content: string, max = 140): string {
+function preview(content: string, max = 160): string {
   const trimmed = content.trim();
   if (trimmed.length <= max) return trimmed;
   return `${trimmed.slice(0, max - 1)}…`;
@@ -127,25 +130,33 @@ export function PostsList() {
 
   if (loadState === "signed_out") {
     return (
-      <div className="flex flex-col gap-3 rounded-lg border border-border p-6">
-        <p className="text-sm text-muted-foreground">
-          Sign in with LinkedIn on the Connections page before managing posts.
-        </p>
-        <Button render={<Link href="/connections" />}>Go to Connections</Button>
-      </div>
+      <EmptyState
+        title="Sign in to manage posts"
+        description="Connect LinkedIn on the Connections page before managing posts."
+        action={<Button render={<Link href="/connections" />}>Go to Connections</Button>}
+      />
     );
   }
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-2" role="group" aria-label="Filter by status">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div
+          className="flex flex-wrap gap-1.5 rounded-xl border border-border/80 bg-background-elevated/60 p-1"
+          role="group"
+          aria-label="Filter by status"
+        >
           {STATUS_FILTERS.map((filter) => (
             <Button
               key={filter.value || "all"}
               type="button"
               size="sm"
-              variant={status === filter.value ? "default" : "outline"}
+              variant={status === filter.value ? "default" : "ghost"}
+              className={
+                status === filter.value
+                  ? "bg-surface-active shadow-sm"
+                  : "text-muted-foreground"
+              }
               onClick={() => changeStatus(filter.value)}
             >
               {filter.label}
@@ -157,14 +168,19 @@ export function PostsList() {
             type="button"
             variant="outline"
             size="sm"
+            className="bg-surface/40"
             onClick={() => {
               setLoadState("loading");
               setReloadToken((value) => value + 1);
             }}
           >
+            <RefreshCw data-icon="inline-start" />
             Refresh
           </Button>
-          <Button render={<Link href="/posts/new" />}>
+          <Button
+            render={<Link href="/posts/new" />}
+            className="gradient-primary border-0 text-white"
+          >
             <Plus data-icon="inline-start" />
             New post
           </Button>
@@ -172,88 +188,103 @@ export function PostsList() {
       </div>
 
       {error ? (
-        <p className="text-sm text-destructive" role="alert">
+        <p className="rounded-xl border border-rose/30 bg-rose/10 px-4 py-3 text-sm text-rose" role="alert">
           {error}
         </p>
       ) : null}
 
       {loadState === "loading" ? (
-        <p className="text-sm text-muted-foreground">Loading posts…</p>
-      ) : null}
-
-      {loadState === "ready" && items.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border px-6 py-10 text-center">
-          <p className="text-sm text-muted-foreground">
-            No posts yet. Schedule your first LinkedIn post to see it here.
-          </p>
+        <div className="flex flex-col gap-3">
+          {[0, 1, 2].map((key) => (
+            <div key={key} className="surface-panel space-y-3 rounded-2xl p-5">
+              <Skeleton className="h-4 w-28" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-2/3" />
+            </div>
+          ))}
         </div>
       ) : null}
 
+      {loadState === "ready" && items.length === 0 ? (
+        <EmptyState
+          icon={Plus}
+          title="No posts yet"
+          description="Schedule your first LinkedIn post or draft one with AI Studio."
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button render={<Link href="/posts/new" />}>Schedule post</Button>
+              <Button variant="outline" render={<Link href="/assistant" />}>
+                Open AI Studio
+              </Button>
+            </div>
+          }
+        />
+      ) : null}
+
       {items.length > 0 ? (
-        <ul className="divide-y divide-border rounded-lg border border-border">
+        <ul className="flex flex-col gap-3">
           {items.map((post) => (
-            <li
-              key={post.id}
-              className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between"
-            >
-              <div className="min-w-0 flex-1 space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <PostStatusBadge status={post.status} />
-                  <span className="text-sm text-muted-foreground">
-                    {formatInTimezone(post.scheduledAt, post.timezone)}
-                    <span className="ml-1 text-xs">({post.timezone})</span>
-                  </span>
+            <li key={post.id}>
+              <PremiumCard interactive className="p-4 sm:p-5">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 flex-1 space-y-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <PostStatusBadge status={post.status} />
+                      <span className="font-meta">
+                        {formatInTimezone(post.scheduledAt, post.timezone)} · {post.timezone}
+                      </span>
+                    </div>
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">
+                      {preview(post.content)}
+                    </p>
+                    {post.nextAttemptAt &&
+                    (post.status === "scheduled" || post.status === "processing") ? (
+                      <p className="font-meta">
+                        Next retry: {formatInTimezone(post.nextAttemptAt, post.timezone)}
+                      </p>
+                    ) : null}
+                    {post.status === "scheduled" ? (
+                      <p className="text-xs text-muted-foreground">
+                        {post.publishApproved
+                          ? "Approved for LinkedIn publishing"
+                          : "Not approved — will not publish until confirmed"}
+                      </p>
+                    ) : null}
+                    {post.publicationSimulated ? (
+                      <p className="text-xs text-muted-foreground">
+                        Not a real LinkedIn post (test/simulation URN)
+                      </p>
+                    ) : null}
+                    {post.status === "requires_review" ? (
+                      <p className="text-xs text-amber">Requires review — will not auto-republish</p>
+                    ) : null}
+                    {post.connectionExpiryWarning ? (
+                      <p className="text-xs text-amber">{post.connectionExpiryWarning}</p>
+                    ) : null}
+                  </div>
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    <Button
+                      render={<Link href={`/posts/${post.id}` as `/posts/${string}`} />}
+                      variant="outline"
+                      size="sm"
+                      className="bg-surface/40"
+                    >
+                      Open
+                    </Button>
+                    {post.status === "scheduled" ? (
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        disabled={busyId === post.id}
+                        onClick={() => void handleCancel(post)}
+                      >
+                        Cancel
+                      </Button>
+                    ) : null}
+                  </div>
                 </div>
-                <p className="whitespace-pre-wrap text-sm text-foreground">{preview(post.content)}</p>
-                {post.nextAttemptAt &&
-                (post.status === "scheduled" || post.status === "processing") ? (
-                  <p className="text-xs text-muted-foreground">
-                    Next retry: {formatInTimezone(post.nextAttemptAt, post.timezone)}
-                  </p>
-                ) : null}
-                {post.status === "scheduled" ? (
-                  <p className="text-xs text-muted-foreground">
-                    {post.publishApproved
-                      ? "Approved for LinkedIn publishing"
-                      : "Not approved — will not publish until confirmed"}
-                  </p>
-                ) : null}
-                {post.publicationSimulated ? (
-                  <p className="text-xs text-muted-foreground">
-                    Not a real LinkedIn post (test/simulation URN)
-                  </p>
-                ) : null}
-                {post.status === "requires_review" ? (
-                  <p className="text-xs text-amber-700 dark:text-amber-400">
-                    Requires review — will not auto-republish
-                  </p>
-                ) : null}
-                {post.connectionExpiryWarning ? (
-                  <p className="text-xs text-amber-700 dark:text-amber-400">
-                    {post.connectionExpiryWarning}
-                  </p>
-                ) : null}
-              </div>
-              <div className="flex shrink-0 flex-wrap gap-2">
-                <Button
-                  render={<Link href={`/posts/${post.id}` as `/posts/${string}`} />}
-                  variant="outline"
-                  size="sm"
-                >
-                  Open
-                </Button>
-                {post.status === "scheduled" ? (
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    size="sm"
-                    disabled={busyId === post.id}
-                    onClick={() => void handleCancel(post)}
-                  >
-                    Cancel
-                  </Button>
-                ) : null}
-              </div>
+              </PremiumCard>
             </li>
           ))}
         </ul>

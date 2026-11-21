@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 
 import { LinkedInConnectionPanel } from "@/components/connections/linkedin-connection-panel";
+import { PageHeader } from "@/components/ui/page-header";
+import { Skeleton } from "@/components/ui/skeleton-loader";
 
 export const metadata: Metadata = {
   title: { absolute: "Connections · PostPilot AI" },
@@ -10,16 +12,12 @@ export const metadata: Metadata = {
 export default function ConnectionsPage() {
   return (
     <div className="flex flex-col gap-8">
-      <header className="flex flex-col gap-2">
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">Connections</h1>
-        <p className="max-w-2xl text-muted-foreground">
-          Manage the LinkedIn account linked to PostPilot. Connection status, scopes, token expiry,
-          and live publishing readiness are shown below. Schedule posts from the Posts page after
-          connecting.
-        </p>
-      </header>
-
-      <Suspense fallback={<p className="text-sm text-muted-foreground">Loading…</p>}>
+      <PageHeader
+        eyebrow="Publishing"
+        title="Connections"
+        description="Manage the LinkedIn account linked to PostPilot — status, scopes, token expiry, and publishing readiness."
+      />
+      <Suspense fallback={<Skeleton className="h-48 w-full max-w-xl rounded-2xl" />}>
         <LinkedInConnectionPanel />
       </Suspense>
     </div>

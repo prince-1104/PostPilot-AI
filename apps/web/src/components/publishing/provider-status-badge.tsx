@@ -46,8 +46,22 @@ export function ProviderStatusBadge() {
     return () => controller.abort();
   }, []);
 
+  const live =
+    readiness?.publishProvider === "linkedin" && readiness.enableRealPublishing;
+
   return (
-    <Badge variant="outline" className="ml-auto text-muted-foreground">
+    <Badge
+      variant="outline"
+      className={
+        live
+          ? "border-emerald/35 bg-emerald/10 font-mono text-[11px] text-emerald"
+          : "border-border bg-surface/60 font-mono text-[11px] text-muted-foreground"
+      }
+    >
+      <span
+        className={`mr-1 size-1.5 rounded-full ${live ? "bg-emerald" : "bg-muted-foreground/50"}`}
+        aria-hidden
+      />
       {labelFor(readiness, signedOut)}
     </Badge>
   );

@@ -1,43 +1,79 @@
-import { Suspense, type ReactNode } from "react";
+"use client";
+
+import { Suspense, type ReactNode, useState } from "react";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { motion, useReducedMotion } from "motion/react";
+import { cn } from "cn";
 
 import { AssistantWidget } from "@/components/assistant/assistant-widget";
 import { AccountSection } from "@/components/layout/account-section";
 import { Logo } from "@/components/layout/logo";
-import { MobileNav } from "@/components/layout/mobile-nav";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
-import { ProviderStatusBadge } from "@/components/publishing/provider-status-badge";
+import { Topbar } from "@/components/layout/topbar";
+import { Button } from "@/components/ui/button";
 
-/** Persistent frame around every page: sidebar on large screens, drawer on small ones. */
 export function AppShell({ children }: { children: ReactNode }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const reduceMotion = useReducedMotion();
+
   return (
     <div className="flex min-h-svh">
-      <aside className="sticky top-0 hidden h-svh w-64 shrink-0 flex-col border-r bg-sidebar lg:flex">
-        <div className="flex h-14 items-center px-5">
-          <Logo />
+      <motion.aside
+        initial={false}
+        animate={{ width: collapsed ? 72 : 250 }}
+        transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 320, damping: 34 }}
+        className="sticky top-0 z-40 hidden h-svh shrink-0 flex-col border-r border-border/80 bg-sidebar/95 backdrop-blur-xl lg:flex"
+      >
+        <div
+          className={cn(
+            "flex h-14 items-center border-b border-border/60",
+            collapsed ? "justify-center px-2" : "justify-between px-4",
+          )}
+        >
+          <Logo collapsed={collapsed} />
+          {!collapsed ? (
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Collapse sidebar"
+              onClick={() => setCollapsed(true)}
+            >
+              <PanelLeftClose className="size-4" />
+            </Button>
+          ) : null}
         </div>
-        <div className="flex-1 overflow-y-auto px-3 py-4">
+
+        {collapsed ? (
+          <div className="flex justify-center border-b border-border/60 py-2">
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Expand sidebar"
+              onClick={() => setCollapsed(false)}
+            >
+              <PanelLeftOpen className="size-4" />
+            </Button>
+          </div>
+        ) : null}
+
+        <div className={cn("flex-1 overflow-y-auto py-4", collapsed ? "px-2" : "px-3")}>
           <Suspense fallback={null}>
-            <SidebarNav />
+            <SidebarNav collapsed={collapsed} />
           </Suspense>
         </div>
-        <AccountSection />
-      </aside>
+
+        <AccountSection collapsed={collapsed} />
+      </motion.aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b bg-background/80 px-4 backdrop-blur-sm lg:px-8">
-          <Suspense fallback={null}>
-            <MobileNav />
-          </Suspense>
-          <div className="lg:hidden">
-            <Logo />
-          </div>
-          <Suspense fallback={null}>
-            <ProviderStatusBadge />
-          </Suspense>
-        </header>
+        <Suspense fallback={null}>
+          <Topbar />
+        </Suspense>
 
-        <main className="flex-1 px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
-          <div className="mx-auto w-full max-w-5xl">{children}</div>
+        <main className="relative flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+          <div className="mx-auto w-full max-w-6xl">{children}</div>
         </main>
       </div>
 

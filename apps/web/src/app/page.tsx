@@ -1,45 +1,11 @@
 import type { Metadata } from "next";
 
-import { PlannedFeatures } from "@/components/dashboard/planned-features";
-import { SystemStatus } from "@/components/dashboard/system-status";
+import { CommandCenter } from "@/components/dashboard/command-center";
 
 export const metadata: Metadata = {
-  // The root layout's title template only applies to nested route segments, and this
-  // page shares the layout's segment, so the full title is spelled out.
   title: { absolute: "Dashboard · PostPilot AI" },
 };
 
 export default function DashboardPage() {
-  return (
-    <div className="flex flex-col gap-10">
-      <header className="flex flex-col gap-2">
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">Dashboard</h1>
-        <p className="max-w-2xl text-muted-foreground">
-          PostPilot AI connects a LinkedIn account and lets you schedule posts for later.
-          Background publishing to LinkedIn and the AI writing assistant are not implemented yet.
-        </p>
-      </header>
-
-      <section aria-labelledby="system-status-heading" className="flex flex-col gap-4">
-        <h2 id="system-status-heading" className="font-heading text-lg font-medium">
-          What is running
-        </h2>
-        <div className="max-w-xl">
-          <SystemStatus />
-        </div>
-      </section>
-
-      <section aria-labelledby="planned-features-heading" className="flex flex-col gap-4">
-        <div className="flex flex-col gap-1">
-          <h2 id="planned-features-heading" className="font-heading text-lg font-medium">
-            Planned features
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            Scheduling is available now. Publishing workers and AI assistance come later.
-          </p>
-        </div>
-        <PlannedFeatures />
-      </section>
-    </div>
-  );
+  return <CommandCenter />;
 }

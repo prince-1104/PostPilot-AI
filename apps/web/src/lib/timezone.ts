@@ -189,8 +189,171 @@ export function formatInTimezone(iso: string, timeZone: string): string {
   }).format(date);
 }
 
-/** Default datetime-local value: now + lead minutes in the given zone. */
+/** Default datetime-local value: now + lead minutes in the given zone, rounded up to 15 minutes. */
 export function defaultLocalDateTime(timeZone: string, leadMinutes = 30): string {
   const when = new Date(Date.now() + leadMinutes * 60_000);
-  return instantToWallLocalInput(when.toISOString(), timeZone);
+  const wall = instantToWallLocalInput(when.toISOString(), timeZone);
+  const { date, time } = splitWallLocal(wall);
+  if (!date || !time) return wall;
+  const [hRaw, mRaw] = time.split(":");
+  const total = Number(hRaw) * 60 + Number(mRaw);
+  if (Number.isNaN(total)) return wall;
+  const rounded = Math.ceil(total / 15) * 15;
+  if (rounded >= 24 * 60) {
+    return wallLocalAtClock(addCalendarDays(date, 1), 0, 0);
+  }
+  return wallLocalAtClock(date, Math.floor(rounded / 60), rounded % 60);
+}
+
+/** Split `YYYY-MM-DDTHH:mm` into date + HH:mm parts. */
+export function splitWallLocal(value: string): { date: string; time: string } {
+  if (!value || !value.includes("T")) return { date: "", time: "" };
+  const [date, rest = ""] = value.split("T");
+  const time = rest.slice(0, 5);
+  return { date: date ?? "", time };
+}
+
+/** Join calendar date + HH:mm into a datetime-local wall string. */
+export function joinWallLocal(date: string, time: string): string {
+  if (!date || !time) return "";
+  return `${date}T${time.slice(0, 5)}`;
+}
+
+/** Add (or subtract) whole calendar days to a `YYYY-MM-DD` string. */
+export function addCalendarDays(date: string, days: number): string {
+  const [yRaw, mRaw, dRaw] = date.split("-");
+  const year = Number(yRaw);
+  const month = Number(mRaw);
+  const day = Number(dRaw);
+  if (!year || !month || !day) return date;
+  const utc = new Date(Date.UTC(year, month - 1, day + days));
+  return `${utc.getUTCFullYear()}-${pad(utc.getUTCMonth() + 1)}-${pad(utc.getUTCDate())}`;
+}
+
+/** Build `YYYY-MM-DDTHH:mm` from a calendar date and clock time. */
+export function wallLocalAtClock(date: string, hour: number, minute: number): string {
+  return joinWallLocal(date, `${pad(hour)}:${pad(minute)}`);
+}
+
+/** Friendly display for a wall-local value, e.g. `21-11-2026 3:07 PM`. */
+export function formatFriendlyWallLocal(value: string): string {
+  const { date, time } = splitWallLocal(value);
+  if (!date || !time) return "";
+  const [y, m, d] = date.split("-");
+  const [hRaw, mRaw] = time.split(":");
+  const hours24 = Number(hRaw);
+  const minutes = Number(mRaw);
+  if (!y || !m || !d || Number.isNaN(hours24) || Number.isNaN(minutes)) return value;
+  const period = hours24 >= 12 ? "PM" : "AM";
+  const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
+  return `${d}-${m}-${y} ${hours12}:${pad(minutes)} ${period}`;
+}
+
+/**
+ * Parse common typed date/time strings into `YYYY-MM-DDTHH:mm`.
+ * Supports:
+ * - 2026-11-21 15:07 / 2026-11-21T15:07
+ * - 21-11-2026 3:07 PM / 21/11/2026 3:07pm
+ * - Nov 21 2026 3pm / November 21, 2026 15:07
+ * Relative words use `timeZone` for "today" context when only a time is given.
+ */
+export function parseFlexibleWallLocal(raw: string, timeZone: string): string | null {
+  const input = raw.trim().replace(/\s+/g, " ");
+  if (!input) return null;
+
+  // Already wall-local
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(input)) {
+    return input.slice(0, 16);
+  }
+
+  // ISO-ish with space: 2026-11-21 15:07
+  const isoSpace = input.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})(?::\d{2})?\s*(am|pm)?$/i);
+  if (isoSpace) {
+    const hour = applyAmPm(Number(isoSpace[4]), isoSpace[6] ?? null);
+    if (hour == null) return null;
+    return wallLocalAtClock(
+      `${isoSpace[1]}-${isoSpace[2]}-${isoSpace[3]}`,
+      hour,
+      Number(isoSpace[5]),
+    );
+  }
+
+  // DMY: 21-11-2026 3:07 PM  or 21/11/2026 15:07
+  const dmy = input.match(
+    /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i,
+  );
+  if (dmy) {
+    const day = Number(dmy[1]);
+    const month = Number(dmy[2]);
+    const year = Number(dmy[3]);
+    const hour = applyAmPm(Number(dmy[4]), dmy[6] ?? null);
+    const minute = Number(dmy[5] ?? "0");
+    if (hour == null || !validYmd(year, month, day) || minute > 59) return null;
+    return wallLocalAtClock(`${year}-${pad(month)}-${pad(day)}`, hour, minute);
+  }
+
+  // Month name: Nov 21 2026 3:07 PM / November 21, 2026 3pm
+  const named = input.match(
+    /^([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i,
+  );
+  if (named) {
+    const month = monthFromName(named[1] ?? "");
+    const day = Number(named[2]);
+    const year = Number(named[3]);
+    const hour = applyAmPm(Number(named[4]), named[6] ?? null);
+    const minute = Number(named[5] ?? "0");
+    if (month == null || hour == null || !validYmd(year, month, day) || minute > 59) return null;
+    return wallLocalAtClock(`${year}-${pad(month)}-${pad(day)}`, hour, minute);
+  }
+
+  // Time only: 3:07 PM / 15:07 — use today's date in zone
+  const timeOnly = input.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+  if (timeOnly) {
+    const hour = applyAmPm(Number(timeOnly[1]), timeOnly[3] ?? null);
+    const minute = Number(timeOnly[2] ?? "0");
+    if (hour == null || minute > 59) return null;
+    const today = instantToWallLocalInput(new Date().toISOString(), timeZone).slice(0, 10);
+    return wallLocalAtClock(today, hour, minute);
+  }
+
+  return null;
+}
+
+function applyAmPm(hour: number, meridiem: string | null): number | null {
+  if (Number.isNaN(hour) || hour < 0 || hour > 23) return null;
+  if (!meridiem) {
+    if (hour > 23) return null;
+    return hour;
+  }
+  const tag = meridiem.toLowerCase();
+  if (hour < 1 || hour > 12) return null;
+  if (tag === "am") return hour === 12 ? 0 : hour;
+  return hour === 12 ? 12 : hour + 12;
+}
+
+function validYmd(year: number, month: number, day: number): boolean {
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const dt = new Date(Date.UTC(year, month - 1, day));
+  return (
+    dt.getUTCFullYear() === year && dt.getUTCMonth() === month - 1 && dt.getUTCDate() === day
+  );
+}
+
+function monthFromName(name: string): number | null {
+  const key = name.slice(0, 3).toLowerCase();
+  const months: Record<string, number> = {
+    jan: 1,
+    feb: 2,
+    mar: 3,
+    apr: 4,
+    may: 5,
+    jun: 6,
+    jul: 7,
+    aug: 8,
+    sep: 9,
+    oct: 10,
+    nov: 11,
+    dec: 12,
+  };
+  return months[key] ?? null;
 }

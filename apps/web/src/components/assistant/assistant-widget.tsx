@@ -1,8 +1,11 @@
 "use client";
 
-import { Copy, MessageCircle, RefreshCw, X } from "lucide-react";
+import { Bot, Copy, RefreshCw, Send, Sparkles, X } from "lucide-react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { cn } from "cn";
 
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api/client";
@@ -39,17 +42,24 @@ const TONES: WritingStyle[] = [
 ];
 
 const STAGE_LABELS: Record<string, string> = {
-  intent: "Understanding request",
-  requirements: "Gathering details",
+  intent: "Understanding your request",
+  requirements: "Gathering requirements",
   awaiting_user: "Waiting for your answers",
-  writing: "Writing draft",
-  reviewing: "Reviewing draft",
+  writing: "Writing your post",
+  reviewing: "Reviewing the draft",
   revising: "Revising draft",
   validating: "Validating draft",
   draft_ready: "Draft ready",
   error: "Needs attention",
   generating: "Working",
 };
+
+export interface AssistantWidgetProps {
+  variant?: "floating" | "studio";
+  /** When set, load this thread (studio thread picker). */
+  threadIdOverride?: string | null;
+  className?: string;
+}
 
 function newClientMessageId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -58,8 +68,15 @@ function newClientMessageId(): string {
   return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-export function AssistantWidget() {
-  const [open, setOpen] = useState(false);
+export function AssistantWidget({
+  variant = "floating",
+  threadIdOverride,
+  className,
+}: AssistantWidgetProps = {}) {
+  const pathname = usePathname();
+  const reduceMotion = useReducedMotion();
+  const isStudio = variant === "studio";
+  const [open, setOpen] = useState(isStudio);
   const [status, setStatus] = useState<AssistantStatus | null>(null);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
@@ -115,7 +132,22 @@ export function AssistantWidget() {
   }, []);
 
   useEffect(() => {
-    if (!open || hydratedRef.current || signedOut) return;
+    if (!(isStudio || open) || signedOut) return;
+    if (threadIdOverride) {
+      const controller = new AbortController();
+      void getAssistantThread(threadIdOverride, controller.signal)
+        .then((detail) => {
+          if (controller.signal.aborted) return;
+          applyThread(detail);
+          hydratedRef.current = true;
+        })
+        .catch((err: unknown) => {
+          if (controller.signal.aborted) return;
+          setError(err instanceof Error ? err.message : "Could not load conversation.");
+        });
+      return () => controller.abort();
+    }
+    if (hydratedRef.current) return;
     const controller = new AbortController();
     void listAssistantThreads(controller.signal)
       .then(async (threads) => {
@@ -137,12 +169,12 @@ export function AssistantWidget() {
         hydratedRef.current = true;
       });
     return () => controller.abort();
-  }, [open, signedOut]);
+  }, [open, signedOut, threadIdOverride, isStudio]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!(isStudio || open)) return;
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, draft, open, stage, preview, scheduledPost]);
+  }, [messages, draft, open, isStudio, stage, preview, scheduledPost]);
 
   useEffect(() => {
     if (!open) return;
@@ -433,91 +465,244 @@ export function AssistantWidget() {
     }
   }
 
-  if (!statusLoaded || signedOut) {
+  if (!isStudio && pathname.startsWith("/assistant")) {
+    return null;
+  }
+
+  if (!statusLoaded) {
+    return null;
+  }
+
+  if (signedOut) {
+    if (isStudio) {
+      return (
+        <div className={cn("flex h-full items-center justify-center p-8", className)}>
+          <p className="text-sm text-muted-foreground">
+            Sign in on Connections to use AI Studio.
+          </p>
+        </div>
+      );
+    }
     return null;
   }
 
   const stageLabel = stage ? STAGE_LABELS[stage] ?? stage.replaceAll("_", " ") : null;
+  const panelOpen = isStudio || open;
+  const inputId = isStudio ? "assistant-studio-input" : "assistant-widget-input";
 
   return (
     <>
-      {!open ? (
-        <button
-          type="button"
-          className="fixed bottom-5 right-5 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          aria-label="Open AI assistant"
-          onClick={() => setOpen(true)}
-        >
-          <MessageCircle className="h-5 w-5" aria-hidden />
-        </button>
-      ) : null}
-
-      {open ? (
-        <section
-          className="fixed inset-0 z-40 flex flex-col bg-background sm:inset-auto sm:bottom-5 sm:right-5 sm:h-[min(680px,calc(100svh-2.5rem))] sm:w-[min(440px,calc(100vw-2.5rem))] sm:rounded-xl sm:border sm:shadow-xl"
-          aria-label="AI content assistant"
-        >
-          <header className="flex items-center justify-between border-b px-4 py-3">
-            <div>
-              <p className="text-sm font-semibold">AI content assistant</p>
-              <p className="text-xs text-muted-foreground">
-                {stageLabel ? `Stage: ${stageLabel}` : "Drafts only — never auto-schedules"}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={busy}
-                onClick={() => void handleNewConversation()}
+      <AnimatePresence>
+        {!isStudio && !open ? (
+          <motion.div
+            key="agent-launcher"
+            className="fixed right-5 bottom-5 z-40"
+            initial={reduceMotion ? false : { scale: 0.7, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={reduceMotion ? undefined : { scale: 0.8, opacity: 0 }}
+            transition={{ duration: 0.22 }}
+          >
+            <button
+              type="button"
+              className="group relative flex size-16 items-center justify-center rounded-full focus-visible:ring-3 focus-visible:ring-violet/50 focus-visible:outline-none"
+              aria-label="Open AI chat agent"
+              onClick={() => setOpen(true)}
+            >
+              <span
+                className="agent-ring pointer-events-none absolute inset-[-6px] rounded-full border border-violet/40 border-t-cyan/70 border-r-transparent"
+                aria-hidden
+              />
+              <span
+                className="agent-ring-delay pointer-events-none absolute inset-[-12px] rounded-full border border-cyan/25 border-b-violet/50 border-l-transparent opacity-70"
+                aria-hidden
+              />
+              <span
+                className={cn(
+                  "gradient-ai relative flex size-14 items-center justify-center rounded-full text-white",
+                  !reduceMotion && "agent-orb-glow",
+                )}
               >
-                New
-              </Button>
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                aria-label="Close assistant"
-                onClick={() => setOpen(false)}
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-          </header>
+                <Bot className="size-6 drop-shadow-[0_0_8px_rgb(255_255_255_/_0.55)]" aria-hidden />
+                <span
+                  className="agent-status-dot absolute right-1 bottom-1 size-2.5 rounded-full bg-cyan ring-2 ring-[#0d1220]"
+                  aria-hidden
+                />
+              </span>
+              <span className="pointer-events-none absolute -top-9 right-0 rounded-full border border-violet/30 bg-background-elevated/95 px-2.5 py-1 text-[11px] font-medium text-violet-light opacity-0 shadow-lg backdrop-blur-md transition-opacity group-hover:opacity-100">
+                Chat agent
+              </span>
+            </button>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
 
-          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
-            {status && !status.aiReady ? (
-              <p className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-                {status.message}
-              </p>
-            ) : null}
-
-            {messages.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                Describe the LinkedIn post you want. Example: “Post a job requirement for AI Engineer
-                at 7 PM.”
-              </p>
-            ) : null}
-
-            {messages.map((message) => (
+      <AnimatePresence>
+        {panelOpen ? (
+          <motion.section
+            key="agent-panel"
+            initial={
+              isStudio || reduceMotion
+                ? false
+                : { opacity: 0, y: 24, scale: 0.96 }
+            }
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={reduceMotion || isStudio ? undefined : { opacity: 0, y: 16, scale: 0.97 }}
+            transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+            className={cn(
+              "flex flex-col overflow-hidden border-border bg-background-elevated/95 backdrop-blur-xl",
+              isStudio
+                ? "h-full min-h-[70vh] rounded-2xl border shadow-xl"
+                : cn(
+                    "fixed inset-0 z-40 sm:inset-auto sm:right-5 sm:bottom-5",
+                    "sm:h-[min(740px,calc(100svh-2.5rem))] sm:w-[min(440px,calc(100vw-2.5rem))]",
+                    "sm:rounded-[1.35rem]",
+                    !reduceMotion && "agent-panel-glow",
+                    reduceMotion && "border shadow-2xl glow-violet",
+                  ),
+              className,
+            )}
+            aria-label="AI chat agent"
+          >
+            {!isStudio ? (
               <div
-                key={message.id}
-                className={
-                  message.role === "user"
-                    ? "ml-8 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground"
-                    : "mr-8 rounded-lg border border-border bg-card px-3 py-2 text-sm"
-                }
-              >
-                <p className="whitespace-pre-wrap">{message.content}</p>
-              </div>
-            ))}
-
-            {busy && stageLabel ? (
-              <p className="text-xs text-muted-foreground" aria-live="polite">
-                {stageLabel}…
-              </p>
+                className="pointer-events-none absolute inset-x-0 top-0 h-24 opacity-80"
+                aria-hidden
+                style={{
+                  background:
+                    "radial-gradient(ellipse 80% 100% at 50% 0%, rgb(139 92 246 / 0.28), transparent 70%)",
+                }}
+              />
             ) : null}
+
+            <header className="relative z-10 flex items-center justify-between border-b border-border/70 px-4 py-3.5">
+              <div className="flex items-center gap-3">
+                <span className="relative">
+                  <span className="gradient-ai flex size-10 items-center justify-center rounded-full text-white shadow-[0_0_24px_-4px_rgb(139_92_246_/_0.8)]">
+                    <Bot className="size-5" aria-hidden />
+                  </span>
+                  <span
+                    className="agent-status-dot absolute right-0 bottom-0 size-2.5 rounded-full bg-cyan ring-2 ring-background-elevated"
+                    aria-hidden
+                  />
+                </span>
+                <div>
+                  <p className="text-sm font-semibold tracking-tight">PostPilot Agent</p>
+                  <p className="flex items-center gap-1.5 font-meta text-cyan/90">
+                    <span className="size-1.5 rounded-full bg-cyan" aria-hidden />
+                    {busy && stageLabel
+                      ? stageLabel
+                      : stageLabel
+                        ? stageLabel
+                        : "Online · drafts only"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  className="border-violet/25 bg-violet/10 text-violet-light hover:bg-violet/20"
+                  onClick={() => void handleNewConversation()}
+                >
+                  New chat
+                </Button>
+                {!isStudio ? (
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label="Close assistant"
+                    onClick={() => setOpen(false)}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                ) : null}
+              </div>
+            </header>
+
+            <div className="relative z-10 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-4">
+              {status && !status.aiReady ? (
+                <p className="rounded-xl border border-amber/30 bg-amber/10 px-3 py-2 text-sm text-amber">
+                  {status.message}
+                </p>
+              ) : null}
+
+              {messages.length === 0 ? (
+                <div className="flex flex-col items-center gap-3 rounded-2xl border border-violet/20 bg-gradient-to-b from-violet/10 to-transparent px-5 py-8 text-center">
+                  <span className="gradient-ai flex size-12 items-center justify-center rounded-full text-white shadow-[0_0_28px_-4px_rgb(139_92_246_/_0.7)]">
+                    <Sparkles className="size-5" aria-hidden />
+                  </span>
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium text-foreground">How can I help you post?</p>
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      Describe the LinkedIn post you want. Example: “Post a job requirement for AI
+                      Engineer at 7 PM.”
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+
+              {messages.map((message) => {
+                const isUser = message.role === "user";
+                return (
+                  <motion.div
+                    key={message.id}
+                    initial={reduceMotion ? false : { opacity: 0, y: 8, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    transition={{ duration: 0.22 }}
+                    className={cn("flex gap-2.5", isUser ? "flex-row-reverse" : "flex-row")}
+                  >
+                    {!isUser ? (
+                      <span className="gradient-ai mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full text-white shadow-[0_0_16px_-4px_rgb(139_92_246_/_0.7)]">
+                        <Bot className="size-3.5" aria-hidden />
+                      </span>
+                    ) : null}
+                    <div
+                      className={cn(
+                        "max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed",
+                        isUser
+                          ? "rounded-br-md border border-violet/40 bg-violet/25 text-foreground shadow-[0_0_20px_-8px_rgb(139_92_246_/_0.55)]"
+                          : "rounded-bl-md border border-border/80 bg-surface/90 text-foreground/95",
+                      )}
+                    >
+                      <p className="whitespace-pre-wrap">{message.content}</p>
+                    </div>
+                  </motion.div>
+                );
+              })}
+
+              {busy ? (
+                <div
+                  className="flex items-center gap-2.5"
+                  aria-live="polite"
+                >
+                  <span className="gradient-ai flex size-7 shrink-0 items-center justify-center rounded-full text-white">
+                    <Bot className="size-3.5" aria-hidden />
+                  </span>
+                  <div className="rounded-2xl rounded-bl-md border border-cyan/30 bg-cyan/10 px-3.5 py-2.5">
+                    <div className="mb-1 flex items-center gap-1.5">
+                      <span
+                        className="agent-typing-dot size-1.5 rounded-full bg-cyan"
+                        style={{ animationDelay: "0ms" }}
+                        aria-hidden
+                      />
+                      <span
+                        className="agent-typing-dot size-1.5 rounded-full bg-cyan"
+                        style={{ animationDelay: "160ms" }}
+                        aria-hidden
+                      />
+                      <span
+                        className="agent-typing-dot size-1.5 rounded-full bg-cyan"
+                        style={{ animationDelay: "320ms" }}
+                        aria-hidden
+                      />
+                    </div>
+                    <p className="text-[11px] text-cyan">{stageLabel ?? "Working"}…</p>
+                  </div>
+                </div>
+              ) : null}
 
             {questions.length > 0 ? (
               <div className="rounded-lg border border-dashed border-border px-3 py-2 text-sm">
@@ -549,15 +734,15 @@ export function AssistantWidget() {
             ) : null}
 
             {draft ? (
-              <div className="rounded-lg border border-border bg-muted/30 p-3">
+              <div className="rounded-2xl border border-violet/25 bg-violet/5 p-3.5">
                 <div className="mb-2 flex items-center justify-between gap-2">
-                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  <p className="font-mono text-[10px] font-medium tracking-[0.14em] text-violet-light uppercase">
                     {draft.label}
                   </p>
-                  <span className="text-xs text-muted-foreground">v{draft.version}</span>
+                  <span className="font-meta">v{draft.version}</span>
                 </div>
                 <textarea
-                  className="min-h-32 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="min-h-32 w-full resize-y rounded-xl border border-input bg-background-elevated px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-violet/40"
                   value={draftText}
                   onChange={(event) => setDraftText(event.target.value)}
                   aria-label="Editable draft content"
@@ -737,32 +922,54 @@ export function AssistantWidget() {
             ) : null}
 
             {error ? (
-              <p className="text-sm text-destructive" role="alert">
+              <p className="text-sm text-rose" role="alert">
                 {error}
               </p>
             ) : null}
             <div ref={bottomRef} />
           </div>
 
-          <form onSubmit={(event) => void handleSubmit(event)} className="border-t p-3">
-            <label htmlFor="assistant-input" className="sr-only">
+          <form
+            onSubmit={(event) => void handleSubmit(event)}
+            className="relative z-10 border-t border-border/70 bg-background/40 p-3 backdrop-blur-md"
+          >
+            <label htmlFor={inputId} className="sr-only">
               Message
             </label>
-            <textarea
-              id="assistant-input"
-              className="mb-2 min-h-16 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              value={input}
-              maxLength={4000}
-              placeholder="Ask for a LinkedIn draft…"
-              disabled={busy}
-              onChange={(event) => setInput(event.target.value)}
-            />
-            <Button type="submit" className="w-full" disabled={busy || input.trim().length === 0}>
-              {busy ? "Working…" : "Send"}
-            </Button>
+            <div className="flex items-end gap-2 rounded-2xl border border-violet/25 bg-surface/60 p-2 shadow-[inset_0_0_24px_-12px_rgb(139_92_246_/_0.35)] focus-within:border-violet/50 focus-within:shadow-[0_0_24px_-8px_rgb(139_92_246_/_0.45)]">
+              <textarea
+                id={inputId}
+                className="max-h-32 min-h-11 flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none placeholder:text-muted-foreground"
+                value={input}
+                maxLength={4000}
+                rows={2}
+                placeholder="Message the agent…"
+                disabled={busy}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    event.currentTarget.form?.requestSubmit();
+                  }
+                }}
+              />
+              <Button
+                type="submit"
+                size="icon"
+                className="gradient-ai size-10 shrink-0 rounded-xl border-0 text-white shadow-[0_0_20px_-4px_rgb(139_92_246_/_0.7)]"
+                disabled={busy || input.trim().length === 0}
+                aria-label={busy ? "Working" : "Send message"}
+              >
+                <Send className="size-4" aria-hidden />
+              </Button>
+            </div>
+            <p className="mt-2 text-center font-meta text-[10px] text-muted-foreground/80">
+              Enter to send · Shift+Enter for new line · never auto-schedules
+            </p>
           </form>
-        </section>
-      ) : null}
+          </motion.section>
+        ) : null}
+      </AnimatePresence>
     </>
   );
 }
