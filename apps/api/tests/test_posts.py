@@ -377,6 +377,7 @@ async def test_edit_reschedule_version_and_cancel(
     )
     assert cancelled.status_code == 200
     assert cancelled.json()["status"] == "cancelled"
+    assert cancelled.json()["next_attempt_at"] is None
 
     again = await db_client.post(
         f"/api/v1/posts/{post['id']}/cancel",

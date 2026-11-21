@@ -17,11 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.models import ScheduledPost
 from app.models.enums import PostStatus
+from app.publishing.gates import AUTH_GATE_RECHECK_SECONDS
 
 logger = structlog.get_logger(__name__)
 
-# Keep blocked historical posts from thrashing the dispatcher while canary mode is on.
-CANARY_DEFER_SECONDS = 7 * 24 * 60 * 60
+# Back-compat alias — canary holds use the short gate recheck, not a multi-day park.
+CANARY_DEFER_SECONDS = AUTH_GATE_RECHECK_SECONDS
 
 
 def canary_enforced(settings: Settings) -> bool:
@@ -54,7 +55,8 @@ async def defer_unapproved_post(
         await session.commit()
         return False
 
-    post.next_attempt_at = clock + timedelta(seconds=CANARY_DEFER_SECONDS)
+    # Short recheck only — do not park for days after the gate is removed.
+    post.next_attempt_at = clock + timedelta(seconds=AUTH_GATE_RECHECK_SECONDS)
     post.dispatch_lease_until = None
     post.updated_at = clock
     await session.commit()
@@ -62,6 +64,7 @@ async def defer_unapproved_post(
         "publish.canary.deferred",
         post_id=str(post_id),
         next_attempt_at=post.next_attempt_at.isoformat(),
+        recheck_seconds=AUTH_GATE_RECHECK_SECONDS,
         canary_count=len(settings.live_publish_canary_post_ids),
     )
     return True

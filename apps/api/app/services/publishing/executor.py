@@ -14,13 +14,13 @@ from app.core.config import Settings
 from app.models import LinkedInConnection, PublishAttempt, ScheduledPost
 from app.models.enums import AttemptExecutionState, ConnectionStatus, PostStatus
 from app.publishing.authorization import (
-    APPROVAL_DEFER_SECONDS,
     db_approval_required,
     defer_unauthorized_post,
     is_db_publish_approved,
 )
 from app.publishing.base import LinkedInPublisher
 from app.publishing.canary import is_post_canary_approved
+from app.publishing.gates import AUTH_GATE_RECHECK_SECONDS
 from app.publishing.outcomes import (
     OutcomeKind,
     PublishExecutionContext,
@@ -88,7 +88,7 @@ class PublishExecutor:
         attempt.finished_at = clock
         attempt.error_category = error_category
         attempt.sanitized_error_code = error_code
-        attempt.next_retry_at = clock + timedelta(seconds=APPROVAL_DEFER_SECONDS)
+        attempt.next_retry_at = clock + timedelta(seconds=AUTH_GATE_RECHECK_SECONDS)
         attempt.updated_at = clock
 
         post.status = PostStatus.SCHEDULED.value
@@ -96,7 +96,8 @@ class PublishExecutor:
         post.current_attempt_id = None
         post.processing_lease_until = None
         post.dispatch_lease_until = None
-        # Do not set last_error_code to a failure that implies LinkedIn rejection.
+        # Gate fingerprint for stale-hold clearance — not a LinkedIn rejection.
+        post.last_error_code = error_code
         post.updated_at = clock
         post.version += 1
         await self._db.commit()
@@ -106,6 +107,7 @@ class PublishExecutor:
             attempt_id=str(attempt.id),
             error_code=error_code,
             next_attempt_at=post.next_attempt_at.isoformat() if post.next_attempt_at else None,
+            recheck_seconds=AUTH_GATE_RECHECK_SECONDS,
         )
         return error_code
 

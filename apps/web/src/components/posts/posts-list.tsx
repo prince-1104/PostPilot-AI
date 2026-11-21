@@ -205,7 +205,8 @@ export function PostsList() {
                   </span>
                 </div>
                 <p className="whitespace-pre-wrap text-sm text-foreground">{preview(post.content)}</p>
-                {post.nextAttemptAt ? (
+                {post.nextAttemptAt &&
+                (post.status === "scheduled" || post.status === "processing") ? (
                   <p className="text-xs text-muted-foreground">
                     Next retry: {formatInTimezone(post.nextAttemptAt, post.timezone)}
                   </p>

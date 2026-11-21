@@ -145,6 +145,7 @@ services:
       - --loglevel=INFO
       # solo: prefork/threads deadlock with asyncio.run()+SQLAlchemy in this stack.
       - --pool=solo
+      - --concurrency=1
       - -Q
       - ${CELERY_QUEUE_PUBLISH:-publish}
     environment: *api-environment

@@ -34,7 +34,7 @@ from app.core.cookies import SESSION_COOKIE
 from app.core.security import TokenEncryptor, hash_token
 from app.db.base import Base
 from app.main import create_app
-from app.models import AuthSession, LinkedInConnection, User
+from app.models import AuthSession, LinkedInConnection, ScheduledPost, User
 from app.models.enums import ConnectionStatus
 
 ALLOWED_ORIGIN = "http://localhost:3000"
@@ -316,7 +316,9 @@ def session_cookie_header(raw_token: str) -> dict[str, str]:
     return {"Cookie": f"{SESSION_COOKIE}={raw_token}"}
 
 
-def stamp_publish_approval(post: ScheduledPost, *, approved_by, clock: datetime | None = None) -> None:
+def stamp_publish_approval(
+    post: ScheduledPost, *, approved_by, clock: datetime | None = None
+) -> None:
     """Mark a seeded post as user-approved for LinkedIn publishing tests."""
     from app.publishing.authorization import apply_publish_approval
 

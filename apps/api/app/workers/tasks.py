@@ -12,7 +12,15 @@ from app.services.publishing.dispatcher import DispatchService
 from app.services.publishing.executor import run_publish_pipeline
 from app.services.publishing.recovery import RecoveryService
 from app.workers.celery_app import celery_app, ensure_celery_configured
-from app.workers.runtime import get_publisher, get_worker_settings, run_async
+from app.workers.runtime import (
+    configure_worker_logging,
+    get_publisher,
+    get_worker_settings,
+    run_async,
+)
+
+# Configure logging once at import (worker/beat set APP_ENV), before tasks run.
+configure_worker_logging()
 
 logger = structlog.get_logger(__name__)
 

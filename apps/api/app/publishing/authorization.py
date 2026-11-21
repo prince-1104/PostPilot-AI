@@ -23,11 +23,12 @@ from app.core.config import Settings
 from app.models import ScheduledPost
 from app.models.enums import PostStatus
 from app.publishing.canary import canary_enforced, is_post_canary_approved
+from app.publishing.gates import AUTH_GATE_RECHECK_SECONDS
 
 logger = structlog.get_logger(__name__)
 
-# Keep blocked unapproved posts from thrashing the dispatcher.
-APPROVAL_DEFER_SECONDS = 7 * 24 * 60 * 60
+# Back-compat alias — approval holds use the short gate recheck.
+APPROVAL_DEFER_SECONDS = AUTH_GATE_RECHECK_SECONDS
 
 
 def approval_payload_hash(
@@ -101,9 +102,8 @@ def apply_publish_approval(
     )
     post.approved_version = post.version
     post.approval_revoked_at = None
-    # Undo canary/approval deferrals so the post becomes due on schedule.
-    if post.next_attempt_at is not None and post.next_attempt_at > post.scheduled_at:
-        post.next_attempt_at = post.scheduled_at
+    # Clear gate holds so the post is eligible as soon as scheduled_at is due.
+    post.next_attempt_at = None
 
 
 def revoke_publish_approval(post: ScheduledPost, *, clock: datetime) -> None:
@@ -120,7 +120,11 @@ async def defer_unauthorized_post(
     reason: str,
     now: datetime | None = None,
 ) -> bool:
-    """Push an unauthorized scheduled post out of the immediate dispatch window."""
+    """Briefly pause an unauthorized post so workers do not busy-loop.
+
+    Does not use multi-day parking. The dispatcher already excludes most unauthorized
+    posts; this only covers races (settings/hash changed after lease).
+    """
     clock = now or datetime.now(UTC)
     result = await session.execute(select(ScheduledPost).where(ScheduledPost.id == post_id))
     post = result.scalar_one_or_none()
@@ -128,7 +132,7 @@ async def defer_unauthorized_post(
         await session.commit()
         return False
 
-    post.next_attempt_at = clock + timedelta(seconds=APPROVAL_DEFER_SECONDS)
+    post.next_attempt_at = clock + timedelta(seconds=AUTH_GATE_RECHECK_SECONDS)
     post.dispatch_lease_until = None
     post.updated_at = clock
     await session.commit()
@@ -137,6 +141,7 @@ async def defer_unauthorized_post(
         post_id=str(post_id),
         reason=reason,
         next_attempt_at=post.next_attempt_at.isoformat(),
+        recheck_seconds=AUTH_GATE_RECHECK_SECONDS,
         canary_enforced=canary_enforced(settings),
     )
     return True

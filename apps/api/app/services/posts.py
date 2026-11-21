@@ -361,6 +361,11 @@ class PostService:
             publish_approved_by=post.publish_approved_by,
             approved_content_hash=post.approved_content_hash,
             approved_version=post.approved_version,
+            # Cancel must not leave a misleading retry schedule in the UI.
+            next_attempt_at=None,
+            dispatch_lease_until=None,
+            processing_lease_until=None,
+            current_attempt_id=None,
         )
         if updated is None:
             await self._db.refresh(post)
@@ -478,6 +483,12 @@ class PostService:
             }
         )
         approved = is_db_publish_approved(post)
+        # Only surface retry timing for posts that may still execute.
+        next_attempt = (
+            post.next_attempt_at
+            if post.status in {PostStatus.SCHEDULED.value, PostStatus.PROCESSING.value}
+            else None
+        )
         return ScheduledPostResponse(
             id=post.id,
             linkedin_connection_id=post.linkedin_connection_id,
@@ -491,7 +502,7 @@ class PostService:
             published_at=post.published_at,
             linkedin_post_urn=urn,
             attempt_count=post.attempt_count,
-            next_attempt_at=post.next_attempt_at,
+            next_attempt_at=next_attempt,
             last_error_code=post.last_error_code,
             last_error_at=post.last_error_at,
             publication_simulated=simulated,

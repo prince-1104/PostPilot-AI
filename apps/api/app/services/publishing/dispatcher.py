@@ -21,6 +21,11 @@ logger = structlog.get_logger(__name__)
 
 EnqueueFn = Callable[[UUID], str | None]
 
+_GATE_ERROR_CODES = (
+    "live_publish_canary_blocked",
+    "publish_approval_required",
+)
+
 
 class DispatchService:
     def __init__(
@@ -36,6 +41,9 @@ class DispatchService:
 
     async def dispatch_due(self, *, now: datetime | None = None) -> dict[str, int]:
         clock = now or datetime.now(UTC)
+        cleared = await self._clear_stale_gate_holds(clock=clock)
+        if cleared:
+            logger.info("publish.dispatcher.cleared_stale_gate_holds", cleared=cleared)
         claimed_ids = await self._claim_batch(clock=clock)
         METRICS.incr("due_posts_discovered", len(claimed_ids))
         logger.info(
@@ -67,11 +75,38 @@ class DispatchService:
 
         return {"claimed": len(claimed_ids), "queued": queued, "failed": failed}
 
+    async def _clear_stale_gate_holds(self, *, clock: datetime) -> int:
+        """Clear leftover canary/approval next_attempt parks once the gate is gone.
+
+        Fingerprint: attempt_count == 0 (classic multi-day park) or last_error_code from
+        an authorization release. Genuine provider retries keep attempt_count >= 1 and a
+        non-gate error code, so they are left alone.
+        """
+        if canary_enforced(self._settings):
+            return 0
+
+        result = await self._db.execute(
+            update(ScheduledPost)
+            .where(
+                ScheduledPost.status == PostStatus.SCHEDULED.value,
+                ScheduledPost.next_attempt_at.is_not(None),
+                ScheduledPost.next_attempt_at > clock,
+                or_(
+                    ScheduledPost.attempt_count == 0,
+                    ScheduledPost.last_error_code.in_(_GATE_ERROR_CODES),
+                ),
+            )
+            .values(next_attempt_at=None, dispatch_lease_until=None, updated_at=func.now())
+        )
+        await self._db.commit()
+        return int(result.rowcount or 0)
+
     async def _claim_batch(self, *, clock: datetime) -> list[UUID]:
         """Lock due scheduled posts, set a short dispatch lease, commit, return IDs.
 
         Uses FOR UPDATE SKIP LOCKED so concurrent dispatchers do not double-claim.
         Posts are NOT moved to processing here — only leased for queue delivery.
+        Multiple due posts (same timestamp or different) are claimed in batch order.
         """
         lease_until = clock + timedelta(seconds=self._settings.dispatch_lease_seconds)
         dialect = self._db.get_bind().dialect.name

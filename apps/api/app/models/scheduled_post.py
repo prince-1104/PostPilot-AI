@@ -50,6 +50,12 @@ class ScheduledPost(Base):
             postgresql_where=text("linkedin_post_urn IS NOT NULL"),
             sqlite_where=text("linkedin_post_urn IS NOT NULL"),
         ),
+        Index(
+            "ix_scheduled_posts_publish_approval",
+            "status",
+            "publish_approved_at",
+            "approval_revoked_at",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)

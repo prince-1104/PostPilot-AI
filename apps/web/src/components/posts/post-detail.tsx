@@ -385,7 +385,8 @@ export function PostDetail({ postId }: { postId: string }) {
             <div>
               <dt className="text-muted-foreground">Next retry</dt>
               <dd>
-                {post.nextAttemptAt
+                {post.nextAttemptAt &&
+                (post.status === "scheduled" || post.status === "processing")
                   ? formatInTimezone(post.nextAttemptAt, post.timezone)
                   : "—"}
               </dd>
@@ -531,6 +532,9 @@ export function PostDetail({ postId }: { postId: string }) {
       ) : null}
 
       <div className="flex flex-wrap gap-2">
+        <Button type="button" render={<Link href="/posts/new" />}>
+          Schedule another
+        </Button>
         {canEdit && !editing ? (
           <Button type="button" disabled={busy} onClick={() => setEditing(true)}>
             Edit / reschedule

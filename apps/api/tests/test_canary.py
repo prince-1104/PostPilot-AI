@@ -14,6 +14,7 @@ from app.models.enums import PostStatus
 from app.publishing.authorization import apply_publish_approval
 from app.publishing.canary import canary_enforced, is_post_canary_approved
 from app.publishing.fake import FakeLinkedInPublisher
+from app.publishing.gates import AUTH_GATE_RECHECK_SECONDS
 from app.publishing.real import RealLinkedInPublisher
 from app.services.publishing.dispatcher import DispatchService
 from app.services.publishing.executor import run_publish_pipeline
@@ -115,6 +116,13 @@ async def test_unapproved_post_never_calls_real_publisher(
     assert post.status == PostStatus.SCHEDULED.value
     assert post.linkedin_post_urn is None
     assert post.next_attempt_at is not None
+    # Gate holds must be short — never a multi-day park.
+    next_at = post.next_attempt_at
+    if next_at.tzinfo is None:
+        next_at = next_at.replace(tzinfo=UTC)
+    delta = (next_at - datetime.now(UTC)).total_seconds()
+    assert delta <= AUTH_GATE_RECHECK_SECONDS + 5
+    assert delta < 3600
 
 
 @pytest.mark.asyncio

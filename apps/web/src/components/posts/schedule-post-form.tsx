@@ -110,14 +110,27 @@ export function SchedulePostForm() {
         },
         idempotencyKeyRef.current,
       );
+      // New logical post → new key so the next schedule is never treated as a retry.
       idempotencyKeyRef.current = newIdempotencyKey();
-      router.push(`/posts/${post.id}`);
+      setContent("");
+      setLocalWhen(defaultLocalDateTime(timezone));
+      setConfirmOpen(false);
+      setSubmitting(false);
+      router.push(`/posts/${post.id}?scheduled=1`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not schedule the post.");
       setSubmitting(false);
       setConfirmOpen(false);
     }
   }
+
+  const scheduleBlockReason = (() => {
+    if (submitting) return null;
+    if (content.trim().length === 0) return "Enter post content to enable scheduling.";
+    if (content.trim().length > CONTENT_MAX) return `Content must be at most ${CONTENT_MAX} characters.`;
+    if (!previewIso) return "Pick a valid local date and time.";
+    return null;
+  })();
 
   if (loadState === "loading") {
     return <p className="text-sm text-muted-foreground">Loading connection…</p>;
@@ -247,6 +260,12 @@ export function SchedulePostForm() {
           </p>
         ) : null}
 
+        {scheduleBlockReason ? (
+          <p className="text-sm text-muted-foreground" role="status">
+            {scheduleBlockReason}
+          </p>
+        ) : null}
+
         <div className="flex flex-wrap gap-2">
           <Button type="submit" disabled={!canSchedule}>
             Schedule &amp; Publish
@@ -255,6 +274,10 @@ export function SchedulePostForm() {
             Cancel
           </Button>
         </div>
+        <p className="text-xs text-muted-foreground">
+          You can schedule as many future posts as you need for this account. Each submit creates a
+          separate post.
+        </p>
       </form>
 
       {confirmOpen ? (

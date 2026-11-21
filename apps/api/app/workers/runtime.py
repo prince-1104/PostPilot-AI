@@ -13,13 +13,27 @@ from app.db.session import create_engine, create_session_factory
 from app.publishing.factory import build_publisher
 
 _settings: Settings | None = None
+_logging_configured = False
+
+
+def configure_worker_logging() -> Settings:
+    """Configure structured logging once at worker/beat process start.
+
+    Must run before Celery begins consuming tasks. Calling ``configure_logging``
+    mid-task clears root handlers and swallows Celery's task received/succeeded lines.
+    """
+    global _settings, _logging_configured
+    settings = get_worker_settings()
+    if not _logging_configured:
+        configure_logging(level=settings.log_level, log_format=settings.log_format)
+        _logging_configured = True
+    return settings
 
 
 def get_worker_settings() -> Settings:
     global _settings
     if _settings is None:
         _settings = get_settings()
-        configure_logging(level=_settings.log_level, log_format=_settings.log_format)
     return _settings
 
 
